@@ -63,7 +63,7 @@
 #include <bluefruit.h>
 #include <SPI.h>
 
-#define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
+#define VERBOSE_OUTPUT (1)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 #define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support
@@ -213,11 +213,32 @@ void setup()
 /* This callback handler is fired every time a valid advertising packet is detected */
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {
+  /* Kalman Variables */
+  float R = 1.12184278324081E-05; // Measurement noise
+  float Q = 1e-8; // System noise
+  float Pc = 0; // Current covariance
+  float K = 0; // Kalman gain
+  float Pp = 1;
+  float Xp = 0;
+  float Zp = 0;
+  float Xe = 0;
+
   node_record_t record;
   
   /* Prepare the record to try to insert it into the existing record list */
   memcpy(record.addr, report->peer_addr.addr, 6); /* Copy the 6-byte device ADDR */
-  record.rssi = report->rssi;                     /* Copy the RSSI value */
+  /* Kalman Filter Starts Here */
+  Pc = Pp + Q;
+  K = Pc/(Pc+R);
+  Pp = (1-K)*Pc;
+  Xp = Xe;
+  Zp = Xp;
+  Xe = K*(R-(report->rssi))+Xp;
+  
+
+
+
+  record.rssi = Xe;
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
 
   /* Attempt to insert the record into the list */

@@ -372,7 +372,7 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   record_nodes[current_node_id].timestamp = scan_received_time;
   record_nodes[current_node_id].reset_flag = false;
   
-  /* To calculate average rssi */ /* here I shoud put the Kalman Filter */
+  /* To calculate average rssi */ /* here I should put the Kalman Filter */
   int temp_rssi = 0;
   for (int i=0; i<RSSI_WIN_SIZE-1; i++)
   {

@@ -63,7 +63,7 @@
 #include <bluefruit.h>
 #include <SPI.h>
 
-#define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
+#define VERBOSE_OUTPUT (1)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 #define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support

@@ -63,18 +63,12 @@
 #include <bluefruit.h>
 #include <SPI.h>
 
-#define VERBOSE_OUTPUT (1)    // Set this to 1 for verbose adv packet output to the serial monitor
+#define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 #define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support
 #define ENABLE_OLED    (0)    // Set this to 1 to enable SSD1306 128x32 OLED display support
 
-#if (ARRAY_SIZE <= 1)
-  #error "ARRAY_SIZE must be at least 2"
-#endif
-#if (ENABLE_TFT) && (ENABLE_OLED)
-  #error "ENABLE_TFT and ENABLE_OLED can not both be set at the same time"
-#endif
 
 // Custom UUID used to differentiate this device.
 // Use any online UUID generator to generate a valid UUID.
@@ -89,41 +83,6 @@ const uint8_t CUSTOM_UUID[] =
 
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
-/* TFT setup if the TFT display is available */
-#if (ENABLE_TFT)
-  #include <Adafruit_GFX.h>
-  #include <Adafruit_ILI9341.h>
-
-   /* Pin setup for the TFT display over SPI */
-  #ifdef ARDUINO_NRF52832_FEATHER
-     #define TFT_DC   11
-     #define TFT_CS   31
-     #define STMPE_CS 30
-     #define SD_CS    27
-  #else
-    #error "Unknown target. Please make sure you are using an nRF52 Feather and BSP 0.6.5 or higher!"
-  #endif
-
-  Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
-#endif
-
-/* 128x32 OLED setup if the OLED display is available */
-#if (ENABLE_OLED)
-  #include <Wire.h>
-  #include <Adafruit_GFX.h>
-  #include <Adafruit_SSD1306.h>
-
-  /* Pin setup for the OLED display */
-  #ifdef ARDUINO_NRF52832_FEATHER
-    #define BUTTON_A 31
-    #define BUTTON_B 30
-    #define BUTTON_C 27
-  #else
-    #error "Unknown target. Please make sure you are using an nRF52 Feather and BSP 0.6.5 or higher!"
-  #endif
-
-  Adafruit_SSD1306 oled = Adafruit_SSD1306();
-#endif
 
 /* This struct is used to track detected nodes */
 typedef struct node_record_s
@@ -136,6 +95,9 @@ typedef struct node_record_s
 
 node_record_t records[ARRAY_SIZE];
 
+// Add BLE services
+BLEUart wearable;       // uart over ble, as the peripheral
+
 void setup()
 {
   Serial.begin(115200);
@@ -143,22 +105,6 @@ void setup()
 
   Serial.println("Bluefruit52 Central Proximity Example");
   Serial.println("-------------------------------------\n");
-
-  /* Enable the TFT display if available */
-  #if ENABLE_TFT
-  tft.begin();
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setCursor(40, 0);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.println("DUNKIN");
-  #endif
-
-  /* Enable the OLED display if available */
-  #if ENABLE_OLED
-  oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  oled.display();
-  #endif
 
   /* Clear the results list */
   memset(records, 0, sizeof(records));
@@ -168,6 +114,9 @@ void setup()
     // since 0 would be higher than any valid RSSI value
     records[i].rssi = -128;
   }
+
+
+  Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
 
   /* Enable both peripheral and central modes */
   if ( !Bluefruit.begin(1, 1) )
@@ -189,8 +138,15 @@ void setup()
   /* Set the device name */
   Bluefruit.setName("Bluefruit52");
 
+  Bluefruit.Periph.setConnectCallback(connect_callback);
+  Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
+
   /* Set the LED interval for blinky pattern on BLUE LED */
   Bluefruit.setConnLedInterval(250);
+
+  // Configure and Start BLE Uart Service
+  wearable.begin();
+  wearable.setRxCallback(prph_bleuart_rx_callback);
 
   /* Start Central Scanning
    * - Enable auto scan if disconnected
@@ -208,6 +164,103 @@ void setup()
   Bluefruit.Scanner.useActiveScan(true);        // Request scan response data
   Bluefruit.Scanner.start(0);                   // 0 = Don't stop scanning after n seconds
   Serial.println("Scanning ...");
+
+  // Set up and start advertising
+  startAdv();
+  Serial.println("Advertising ...");
+}
+
+void startAdv(void)
+{   
+  // Note: The entire advertising packet is limited to 31 bytes!
+  
+  // Advertising packet
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+
+  // Include bleuart 128-bit uuid
+  Bluefruit.Advertising.addService(wearable);
+
+  // Preferred Solution: Add a custom UUID to the advertising payload, which
+  // we will look for on the Central side via Bluefruit.Scanner.filterUuid(uuid);
+  // A valid 128-bit UUID can be generated online with almost no chance of conflict
+  // with another device or etup
+  Bluefruit.Advertising.addUuid(uuid);
+
+  /*
+  // Alternative Solution: Manufacturer Specific Data (MSD)
+  // You could also send a custom MSD payload and filter for the 'Company ID'
+  // via 'Bluefruit.Scanner.filterMSD(CID);', although this does require a
+  // valid CID, which is why the UUID method above is more appropriate in
+  // most situations. For a complete list of valid company IDs see:
+  // https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers
+  // For test purposes, 0xFFFF CAN be used, but according to the Bluetooth SIG:
+  // > "This value may be used in the internal and interoperability tests before a
+  // >  Company ID has been assigned. This value shall not be used in shipping end
+  // >  products."
+  uint8_t msd_payload[4]; // Two bytes are required for the CID, so we have 2 bytes user data, expand as needed
+  uint16_t msd_cid = 0xFFFF;
+  memset(msd_payload, 0, sizeof(msd_payload));
+  memcpy(msd_payload, (uint8_t*)&msd_cid, sizeof(msd_cid));
+  msd_payload[2] = 0x11;
+  msd_payload[3] = 0x22;
+  Bluefruit.Advertising.addData(BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, msd_payload, sizeof(msd_payload));
+  */
+
+  // Not enough room in the advertising packet for name
+  // so store it in the Scan Response instead
+  Bluefruit.ScanResponse.addName();
+
+  /* Start Advertising
+   * - Enable auto advertising if disconnected
+   * - Interval:  fast mode = 20 ms, slow mode = 152.5 ms
+   * - Timeout for fast mode is 30 seconds
+   * - Start(timeout) with timeout = 0 will advertise forever (until connected)
+   * 
+   * For recommended advertising interval
+   * https://developer.apple.com/library/content/qa/qa1931/_index.html
+   */
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);    // in units of 0.625 ms
+  Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
+  Bluefruit.Advertising.start();
+}
+
+// callback invoked when central connects
+void connect_callback(uint16_t conn_handle)
+{
+  // Get the reference to current connection
+  BLEConnection* connection = Bluefruit.Connection(conn_handle);
+
+  char peer_name[32] = { 0 };
+  connection->getPeerName(peer_name, sizeof(peer_name));
+
+  Serial.print("Connected to ");
+  Serial.println(peer_name);
+
+  wearable.notifyEnabled();
+  
+  // Send data to central
+  char str[5+1] = "hello";
+  wearable.write(str, 5);
+  Serial.print("[Prph] TX: ");
+  Serial.println(str);
+}
+
+void disconnect_callback(uint16_t conn_handle, uint8_t reason)
+{
+  (void) conn_handle;
+  (void) reason;
+
+  Serial.println();
+  Serial.println("Disconnected");
+}
+
+void prph_bleuart_rx_callback(uint16_t conn_handle)
+{
+  (void) conn_handle;
+
+  
 }
 
 /* This callback handler is fired every time a valid advertising packet is detected */
@@ -225,16 +278,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   {
     printRecordList();                            /* The list was updated, print the new values */
     Serial.println("");
-    
-    /* Display the device list on the TFT if available */
-    #if ENABLE_TFT
-    renderResultsToTFT();
-    #endif
-  
-    /* Display the device list on the OLED if available */
-    #if ENABLE_OLED
-    renderResultsToOLED();
-    #endif
   }
 
 /* Fully parse and display the advertising packet to the Serial Monitor
@@ -365,85 +408,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   // We need to call Scanner resume() to continue scanning
   Bluefruit.Scanner.resume();
 }
-
-#if ENABLE_TFT
-void renderResultsToTFT(void)
-{
-  tft.fillRect(0, 0, 240, ARRAY_SIZE*8, ILI9341_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(0, 0);
-  
-  for (uint8_t i=0; i<ARRAY_SIZE; i++)
-  {
-    if (records[i].addr[0] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[0], HEX);
-    tft.print(":");
-    if (records[i].addr[1] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[1], HEX);
-    tft.print(":");
-    if (records[i].addr[2] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[2], HEX);
-    tft.print(":");
-    if (records[i].addr[3] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[3], HEX);
-    tft.print(":");
-    if (records[i].addr[4] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[4], HEX);
-    tft.print(":");
-    if (records[i].addr[5] <= 0xF) tft.print("0");
-    tft.print(records[i].addr[5], HEX);
-    tft.print(" ");
-    tft.print(records[i].rssi);
-    tft.print(" [");
-    tft.print(records[i].timestamp);
-    tft.println("] ");
-  }
-}
-#endif
-
-#if ENABLE_OLED
-void renderResultsToOLED(void)
-{
-  oled.clearDisplay();
-  oled.setTextSize(1);
-  oled.setTextColor(WHITE);
-
-  for (uint8_t i=0; i<ARRAY_SIZE; i++)
-  {
-    if (i>=4)
-    {
-      /* We can only display four records on a 128x32 pixel display */
-      oled.display();
-      return;
-    }
-    if (records[i].rssi != -128)
-    {
-      oled.setCursor(0, i*8);
-      if (records[i].addr[0] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[0], HEX);
-      oled.print(":");
-      if (records[i].addr[1] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[1], HEX);
-      oled.print(":");
-      if (records[i].addr[2] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[2], HEX);
-      oled.print(":");
-      if (records[i].addr[3] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[3], HEX);
-      oled.print(":");
-      if (records[i].addr[4] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[4], HEX);
-      oled.print(":");
-      if (records[i].addr[5] <= 0xF) oled.print("0");
-      oled.print(records[i].addr[5], HEX);
-      oled.print(" ");
-      oled.println(records[i].rssi);
-    }
-  }
-
-  oled.display();
-}
-#endif
 
 /* Prints a UUID16 list to the Serial Monitor */
 void printUuid16List(uint8_t* buffer, uint8_t len)
@@ -651,8 +615,25 @@ sort_then_exit:
 
 void loop() 
 {
-  /* Toggle red LED every second */
-  digitalToggle(LED_RED);
+  // Forward from Serial to BLEUART
+  if (Serial.available())
+  {
+    // Delay to get enough input data since we have a
+    // limited amount of space in the transmit buffer
+    delay(2);
+ 
+    uint8_t buf[64];
+    int count = Serial.readBytes(buf, sizeof(buf));
+    wearable.write( buf, count );
+  }
+ 
+  // Forward from BLEUART to Serial
+  if ( wearable.available() )
+  {
+    uint8_t ch;
+    ch = (uint8_t) wearable.read();
+    Serial.write(ch);
+  }
 
   /* Invalidate old results once per second in addition
    * to the invalidation in the callback handler. */
@@ -674,6 +655,4 @@ void loop()
     renderResultsToOLED();
     #endif
   }
- 
-  delay(1000);
 }

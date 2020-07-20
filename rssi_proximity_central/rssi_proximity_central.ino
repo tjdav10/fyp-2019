@@ -61,6 +61,7 @@
 
 #include <string.h>
 #include <bluefruit.h>
+#include <ble_gap.h>
 #include <SPI.h>
 
 #define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
@@ -83,6 +84,7 @@ const uint8_t CUSTOM_UUID[] =
 
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
+char Scanned_Name[4+1]; // This is to store scanned BLE name
 
 /* This struct is used to track detected nodes */
 typedef struct node_record_s
@@ -90,6 +92,7 @@ typedef struct node_record_s
   uint8_t  addr[6];    // Six byte device address
   int8_t   rssi;       // RSSI value
   uint32_t timestamp;  // Timestamp for invalidation purposes
+  char name[4+1];       // Name of detected device
   int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
@@ -136,7 +139,7 @@ void setup()
   Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values
 
   /* Set the device name */
-  Bluefruit.setName("Bluefruit52");
+  Bluefruit.setName("D001");
 
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
@@ -179,7 +182,7 @@ void startAdv(void)
   Bluefruit.Advertising.addTxPower();
 
   // Include bleuart 128-bit uuid
-  Bluefruit.Advertising.addService(wearable);
+  //Bluefruit.Advertising.addService(wearable); //this actually is not necessary, it includes generic UUID that represents UART is available. we just use our own UUID.
 
   // Preferred Solution: Add a custom UUID to the advertising payload, which
   // we will look for on the Central side via Bluefruit.Scanner.filterUuid(uuid);
@@ -207,9 +210,13 @@ void startAdv(void)
   Bluefruit.Advertising.addData(BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, msd_payload, sizeof(msd_payload));
   */
 
+
   // Not enough room in the advertising packet for name
   // so store it in the Scan Response instead
-  Bluefruit.ScanResponse.addName();
+  //Bluefruit.ScanResponse.addName();
+
+  // Can actually have short name in adv packet, 5 characters max
+  Bluefruit.Advertising.addName();
 
   /* Start Advertising
    * - Enable auto advertising if disconnected
@@ -238,13 +245,6 @@ void connect_callback(uint16_t conn_handle)
   Serial.print("Connected to ");
   Serial.println(peer_name);
 
-  wearable.notifyEnabled();
-  
-  // Send data to central
-  char str[5+1] = "hello";
-  wearable.write(str, 5);
-  Serial.print("[Prph] TX: ");
-  Serial.println(str);
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)
@@ -265,12 +265,16 @@ void prph_bleuart_rx_callback(uint16_t conn_handle)
 
 /* This callback handler is fired every time a valid advertising packet is detected */
 void scan_callback(ble_gap_evt_adv_report_t* report)
-{
+{  
   node_record_t record;
+  uint8_t buffer[32];
   
   /* Prepare the record to try to insert it into the existing record list */
   memcpy(record.addr, report->peer_addr.addr, 6); /* Copy the 6-byte device ADDR */
   record.rssi = report->rssi;                     /* Copy the RSSI value */
+  Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
+  memcpy(record.name, buffer, sizeof(record.name));
+  Serial.println(record.name);
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
 
   /* Attempt to insert the record into the list */
@@ -444,7 +448,8 @@ void printRecordList(void)
   for (uint8_t i = 0; i<ARRAY_SIZE; i++)
   {
     Serial.printf("[%i] ", i);
-    Serial.printBuffer(records[i].addr, 6, ':');
+    //Serial.printBuffer(records[i].addr, 6, ':');
+    Serial.printf("%s",records[i].name);
     Serial.printf(" %i (%u ms)\n", records[i].rssi, records[i].timestamp);
   }
 }

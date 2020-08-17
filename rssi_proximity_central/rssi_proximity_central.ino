@@ -66,6 +66,7 @@
 
 #define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
+#define CONTACT_SIZE   (8)    // Number of unique contacts in list
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 #define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support
 #define ENABLE_OLED    (0)    // Set this to 1 to enable SSD1306 128x32 OLED display support
@@ -91,12 +92,24 @@ typedef struct node_record_s
 {
   uint8_t  addr[6];    // Six byte device address
   int8_t   rssi;       // RSSI value
+  uint32_t t_intial    // Initial timestamp
   uint32_t timestamp;  // Timestamp for invalidation purposes
   char name[4+1];       // Name of detected device
   int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
+
+/* This struct is used to track all nodes that have been in proximity and length of time*/
+typedef struct contact_record_s
+{
+  uint32_t duration;
+  char name[4+1];
+  int8_t reserved;
+  
+} contact_record_t
+
 node_record_t records[ARRAY_SIZE];
+contact_record_t contacts[CONTACT_SIZE]; // this is the list that should be sent to the dispenser
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
@@ -106,7 +119,7 @@ void setup()
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 
-  Serial.println("Bluefruit52 Central Proximity Example");
+  Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");
 
   /* Clear the results list */
@@ -117,7 +130,17 @@ void setup()
     // since 0 would be higher than any valid RSSI value
     records[i].rssi = -128;
   }
-
+  
+  /* Clear the second list */
+  /*
+  memset(contacts, 0, sizeof(contacts));
+  for (uint8_t i = 0; i<CONTACT_SIZE; i++)
+  {
+    // Set all RSSI values to lowest value for comparison purposes,
+    // since 0 would be higher than any valid RSSI value
+    contacts[i].rssi = -128;
+  }
+  */
 
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
 
@@ -181,38 +204,14 @@ void startAdv(void)
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
 
-  // Include bleuart 128-bit uuid
-  //Bluefruit.Advertising.addService(wearable); //this actually is not necessary, it includes generic UUID that represents UART is available. we just use our own UUID.
-
   // Preferred Solution: Add a custom UUID to the advertising payload, which
   // we will look for on the Central side via Bluefruit.Scanner.filterUuid(uuid);
   // A valid 128-bit UUID can be generated online with almost no chance of conflict
   // with another device or etup
   Bluefruit.Advertising.addUuid(uuid);
 
-  /*
-  // Alternative Solution: Manufacturer Specific Data (MSD)
-  // You could also send a custom MSD payload and filter for the 'Company ID'
-  // via 'Bluefruit.Scanner.filterMSD(CID);', although this does require a
-  // valid CID, which is why the UUID method above is more appropriate in
-  // most situations. For a complete list of valid company IDs see:
-  // https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers
-  // For test purposes, 0xFFFF CAN be used, but according to the Bluetooth SIG:
-  // > "This value may be used in the internal and interoperability tests before a
-  // >  Company ID has been assigned. This value shall not be used in shipping end
-  // >  products."
-  uint8_t msd_payload[4]; // Two bytes are required for the CID, so we have 2 bytes user data, expand as needed
-  uint16_t msd_cid = 0xFFFF;
-  memset(msd_payload, 0, sizeof(msd_payload));
-  memcpy(msd_payload, (uint8_t*)&msd_cid, sizeof(msd_cid));
-  msd_payload[2] = 0x11;
-  msd_payload[3] = 0x22;
-  Bluefruit.Advertising.addData(BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, msd_payload, sizeof(msd_payload));
-  */
-
-
-  // Not enough room in the advertising packet for name
-  // so store it in the Scan Response instead
+  // if there is not enough room in the advertising packet for name
+  // ,store it in the Scan Response instead
   //Bluefruit.ScanResponse.addName();
 
   // Can actually have short name in adv packet, 5 characters max
@@ -245,6 +244,14 @@ void connect_callback(uint16_t conn_handle)
   Serial.print("Connected to ");
   Serial.println(peer_name);
 
+  uint8_t buf[64];
+  delay(5000);
+  wearable.write("Sending info...");
+  //uint8_t buf[64];
+  wearable.write(peer_name);
+  //Serial.print("%c",records[1].name); // trying to access name inside record
+  wearable.write(records[1].name);
+
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)
@@ -267,15 +274,17 @@ void prph_bleuart_rx_callback(uint16_t conn_handle)
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {  
   node_record_t record;
-  uint8_t buffer[32];
+  uint8_t buffer[4+1]; // used for names of 4 chars long
   
   /* Prepare the record to try to insert it into the existing record list */
   memcpy(record.addr, report->peer_addr.addr, 6); /* Copy the 6-byte device ADDR */
   record.rssi = report->rssi;                     /* Copy the RSSI value */
   Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
-  memcpy(record.name, buffer, sizeof(record.name));
-  Serial.println(record.name);
+  memcpy(record.name, buffer, sizeof(record.name)); // copy contents of buffer to name field
+  memset(buffer, 0, sizeof(buffer)); // reset buffer
+  //Serial.println(record.name);
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
+  record.t_initial = millis();
 
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
@@ -454,6 +463,16 @@ void printRecordList(void)
   }
 }
 
+void sendRecordList(void)
+{
+  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
+  {
+    wearable.write(records[i].name);
+    wearable.write(records[i].rssi);
+    wearable.write(records[i].timestamp);
+  }
+}
+
 /* This function performs a simple bubble sort on the records array */
 /* It's slow, but relatively easy to understand */
 /* Sorts based on RSSI values, where the strongest signal appears highest in the list */
@@ -486,6 +505,7 @@ void bubbleSort(void)
 int invalidateRecords(void)
 {
   uint8_t i;
+  uint8_t buffer[4+1]; // used for names of 4 chars long
   int match = 0;
 
   /* Not enough time has elapsed to avoid an underflow error */
@@ -649,7 +669,8 @@ void loop()
   if (invalidateRecords())
   {
     /* The list was updated, print the new values */
-    printRecordList();
+    //printRecordList();
+    //sendRecordList();
     Serial.println("");
     /* Display the device list on the TFT if available */
     #if ENABLE_TFT

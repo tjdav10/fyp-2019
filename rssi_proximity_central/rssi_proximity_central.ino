@@ -66,7 +66,6 @@
 
 #define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
-#define CONTACT_SIZE   (8)    // Number of unique contacts in list
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 #define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support
 #define ENABLE_OLED    (0)    // Set this to 1 to enable SSD1306 128x32 OLED display support
@@ -85,31 +84,20 @@ const uint8_t CUSTOM_UUID[] =
 
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
-char Scanned_Name[4+1]; // This is to store scanned BLE name
-
 /* This struct is used to track detected nodes */
 typedef struct node_record_s
 {
   uint8_t  addr[6];    // Six byte device address
   int8_t   rssi;       // RSSI value
-  uint32_t t_intial    // Initial timestamp
   uint32_t timestamp;  // Timestamp for invalidation purposes
-  char name[4+1];       // Name of detected device
+  char name[4];       // Name of detected device
+  uint8_t count;
   int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
-
-/* This struct is used to track all nodes that have been in proximity and length of time*/
-typedef struct contact_record_s
-{
-  uint32_t duration;
-  char name[4+1];
-  int8_t reserved;
-  
-} contact_record_t
+bool connected; // use to see if wearable is connected to central
 
 node_record_t records[ARRAY_SIZE];
-contact_record_t contacts[CONTACT_SIZE]; // this is the list that should be sent to the dispenser
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
@@ -131,17 +119,6 @@ void setup()
     records[i].rssi = -128;
   }
   
-  /* Clear the second list */
-  /*
-  memset(contacts, 0, sizeof(contacts));
-  for (uint8_t i = 0; i<CONTACT_SIZE; i++)
-  {
-    // Set all RSSI values to lowest value for comparison purposes,
-    // since 0 would be higher than any valid RSSI value
-    contacts[i].rssi = -128;
-  }
-  */
-
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
 
   /* Enable both peripheral and central modes */
@@ -243,15 +220,7 @@ void connect_callback(uint16_t conn_handle)
 
   Serial.print("Connected to ");
   Serial.println(peer_name);
-
-  uint8_t buf[64];
-  delay(5000);
-  wearable.write("Sending info...");
-  //uint8_t buf[64];
-  wearable.write(peer_name);
-  //Serial.print("%c",records[1].name); // trying to access name inside record
-  wearable.write(records[1].name);
-
+  connected = true;
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)
@@ -261,6 +230,7 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
 
   Serial.println();
   Serial.println("Disconnected");
+  connected = false;
 }
 
 void prph_bleuart_rx_callback(uint16_t conn_handle)
@@ -274,17 +244,16 @@ void prph_bleuart_rx_callback(uint16_t conn_handle)
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {  
   node_record_t record;
-  uint8_t buffer[4+1]; // used for names of 4 chars long
+  uint8_t buffer[4]; // used for names of 4 chars long
   
   /* Prepare the record to try to insert it into the existing record list */
   memcpy(record.addr, report->peer_addr.addr, 6); /* Copy the 6-byte device ADDR */
   record.rssi = report->rssi;                     /* Copy the RSSI value */
   Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
-  memcpy(record.name, buffer, sizeof(record.name)); // copy contents of buffer to name field
+  memcpy(record.name, buffer, 4); // copy contents of buffer to name field
   memset(buffer, 0, sizeof(buffer)); // reset buffer
   //Serial.println(record.name);
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
-  record.t_initial = millis();
 
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
@@ -458,18 +427,9 @@ void printRecordList(void)
   {
     Serial.printf("[%i] ", i);
     //Serial.printBuffer(records[i].addr, 6, ':');
-    Serial.printf("%s",records[i].name);
-    Serial.printf(" %i (%u ms)\n", records[i].rssi, records[i].timestamp);
-  }
-}
-
-void sendRecordList(void)
-{
-  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
-  {
-    wearable.write(records[i].name);
-    wearable.write(records[i].rssi);
-    wearable.write(records[i].timestamp);
+    Serial.printf("%.4s ",records[i].name);
+    Serial.printf("%i ",records[i].count);
+    Serial.printf("%i (%u ms)\n", records[i].rssi, records[i].timestamp);
   }
 }
 
@@ -606,6 +566,7 @@ int insertRecord(node_record_t *record)
     if (match)
     {
       memcpy(&records[i], record, sizeof(node_record_t));
+      records[i].count += 1;
       goto sort_then_exit;
     }
   }
@@ -640,6 +601,27 @@ sort_then_exit:
 
 void loop() 
 {
+
+
+  // following block sends names on list over Bluetooth ignoring blank entries
+  // Trying to send list over Bluetooth - it works!!
+  uint8_t buf[4]; // uint8_t buffer to use in wearable.write
+  if(connected)
+  {
+    for (int i=0; i<ARRAY_SIZE; i++)
+    {
+      if (records[i].rssi!=-128) // checks to see if there is actually a device in this spot, if not nothing happens
+      {
+        memcpy(buf, records[i].name, sizeof(buf)); // copy contents of name to buffer
+        wearable.write(buf, sizeof(buf)); // write name of device
+        memset(buf, 0, sizeof(buf)); // reset buffer
+        //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
+        wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
+        //memset(buf, 0, sizeof(buf)); // reset buffer
+      }
+    }
+  }
+  
   // Forward from Serial to BLEUART
   if (Serial.available())
   {
@@ -660,7 +642,7 @@ void loop()
     Serial.write(ch);
   }
 
-  /* Invalidate old results once per second in addition
+   /* Invalidate old results once per second in addition
    * to the invalidation in the callback handler. */
   /* ToDo: Update to use a mutex or semaphore since this
    * can lead to list corruption as-is if the scann results

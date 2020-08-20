@@ -12,8 +12,13 @@
  any redistribution
 *********************************************************************/
 #include <bluefruit.h>
+#include <SimpleKalmanFilter.h>
+#include <movingAvg.h>
 
 BLEUart bleuart; // uart over ble
+
+SimpleKalmanFilter kalman(1, 1, 0.1);
+movingAvg m5(5);
 
 void setup()
 {
@@ -45,7 +50,9 @@ void setup()
   // Set up and start advertising
   startAdv();
 
-  Serial.println("Please use Adafruit's Bluefruit LE app to connect");
+  Serial.println("Raw Kalman Moving_avg");
+
+  m5.begin(); // start the moving average
 }
 
 void startAdv(void)
@@ -88,8 +95,17 @@ void loop()
     // get the RSSI value of this connection
     // monitorRssi() must be called previously (in connect callback)
     int8_t rssi = connection->getRssi();
+
+    int8_t kal_rssi = kalman.updateEstimate(rssi); // using the simple kalman library filter
+
+    int8_t m5_rssi = m5.reading(rssi);
+    Serial.print(rssi);
+    Serial.print(" ");
+    Serial.print(kal_rssi);
+    Serial.print(" ");
+    Serial.print(m5_rssi);
     
-    Serial.printf("Rssi = %d", rssi);
+    //Serial.printf("raw = %d kalman = %d m5 = %d", rssi, kal_rssi, m5_rssi);
     Serial.println();
 
     // print every 152ms (as this is how often the wearable advertises in slow mode)
@@ -99,7 +115,7 @@ void loop()
 
 void connect_callback(uint16_t conn_handle)
 {
-  Serial.println("Connected");
+  //Serial.println("Connected");
 
   // Get the reference to current connection
   BLEConnection* conn = Bluefruit.Connection(conn_handle);

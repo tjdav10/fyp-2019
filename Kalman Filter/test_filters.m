@@ -1,18 +1,22 @@
 clear all; close all; clc;
 
+% reading from file
+fileID = fopen('data.log');
+data = fscanf(fileID,'%d');
+
 % Declaring parameters - adjust these to tune Kalman Filter
-meas_uncertainty = 2; % mesaurement uncertainty
+meas_uncertainty = 2; % measurement uncertainty
 est_uncertainty = 2; % estimate uncertainty
 q = 0.01; % process noise
 
-window_size = 5; % set window size for moving average filter
+window_size = 20; % set window size for moving average filter
 
 % temporary
 % meas = 0;
 % prev_est = 0;
 
 % Arrays set up
-data = zeros(1,1000); % replace to read from file
+% data = zeros(1,1000); % replace to read from file
 kalman_out = zeros(1,1000);
 
 % in loop
@@ -35,3 +39,8 @@ end
 % size 2 etc.)
 
 m_avg_out = movmean(data,[(window_size)-1 0]);
+
+plot(data);
+hold on;
+plot(kalman_out);
+plot(m_avg_out);

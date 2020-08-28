@@ -1,31 +1,18 @@
-/*********************************************************************
- This is an example for our nRF52 based Bluefruit LE modules
-
- Pick one up today in the adafruit shop!
-
- Adafruit invests time and resources providing this open source code,
- please support Adafruit and open-source hardware by purchasing
- products from Adafruit!
-
- MIT license, check LICENSE for more information
- All text above, and the splash screen below must be included in
- any redistribution
-*********************************************************************/
 #include <bluefruit.h>
-#include <SimpleKalmanFilter.h>
-#include <movingAvg.h>
 
-BLEUart bleuart; // uart over ble
-
-SimpleKalmanFilter kalman(1, 1, 0.1);
-movingAvg m5(5);
+const uint8_t CUSTOM_UUID[] =
+{
+    0xA0, 0xDB, 0xD3, 0x6A, 0x00, 0xA6, 0xF7, 0x8C,
+    0xE7, 0x11, 0x8F, 0x71, 0x1A, 0xFF, 0x67, 0xDF
+};
+BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
 void setup()
 {
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 
-  Serial.println("Bluefruit52 RSSI Example");
+  Serial.println("RSSI test program");
   Serial.println("------------------------\n");
 
   // Setup the BLE LED to be enabled on CONNECT
@@ -44,15 +31,11 @@ void setup()
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);  
   
-  // Configure and Start BLE Uart Service
-  bleuart.begin();
 
   // Set up and start advertising
   startAdv();
 
-  Serial.println("Raw Kalman Moving_avg");
-
-  m5.begin(); // start the moving average
+  //Serial.println("Please use Adafruit's Bluefruit LE app to connect");
 }
 
 void startAdv(void)
@@ -61,8 +44,8 @@ void startAdv(void)
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
 
-  // Include bleuart 128-bit uuid
-  Bluefruit.Advertising.addService(bleuart);
+  // Include custom UUID
+  Bluefruit.Advertising.addUuid(uuid);
 
   // Secondary Scan Response packet (optional)
   // Since there is no room for 'Name' in Advertising packet
@@ -95,27 +78,18 @@ void loop()
     // get the RSSI value of this connection
     // monitorRssi() must be called previously (in connect callback)
     int8_t rssi = connection->getRssi();
-
-    int8_t kal_rssi = kalman.updateEstimate(rssi); // using the simple kalman library filter
-
-    int8_t m5_rssi = m5.reading(rssi);
-    Serial.print(rssi);
-    Serial.print(" ");
-    Serial.print(kal_rssi);
-    Serial.print(" ");
-    Serial.print(m5_rssi);
     
-    //Serial.printf("raw = %d kalman = %d m5 = %d", rssi, kal_rssi, m5_rssi);
+    Serial.printf("%d", rssi);
     Serial.println();
 
-    // print every 152ms (as this is how often the wearable advertises in slow mode)
-    delay(152);
+    // print onece every 30 ms (approx the speed packets are advertised in slow mode)
+    delay(30);
   }
 }
 
 void connect_callback(uint16_t conn_handle)
 {
-  //Serial.println("Connected");
+  Serial.println("Connected");
 
   // Get the reference to current connection
   BLEConnection* conn = Bluefruit.Connection(conn_handle);

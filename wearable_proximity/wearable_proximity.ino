@@ -1,19 +1,3 @@
-/*********************************************************************
- This is an example for our nRF52 based Bluefruit LE modules
-
- Pick one up today in the adafruit shop!
-
- Adafruit invests time and resources providing this open source code,
- please support Adafruit and open-source hardware by purchasing
- products from Adafruit!
-
- MIT license, check LICENSE for more information
- All text above, and the splash screen below must be included in
- any redistribution
-
- Author: KTOWN (Kevin Townsend)
- Copyright (C) Adafruit Industries 2017
-*********************************************************************/
 
 /*  This example scans for advertising devices (peripherals) in range,
  *  looking for a specific UUID in the advertising packet. When this
@@ -26,7 +10,7 @@
  *  in the record list.
  *  
  *  This example is intended to be used with multiple peripherals
- *  devices running the *_peripheral.ino version of this application.
+ *  devices that are advertising with a specific UUID.
  *  
  *  VERBOSE_OUTPUT
  *  --------------
@@ -45,18 +29,6 @@
  *  This value determines the number of milliseconds before a tracked
  *  peripheral has it's last sample 'invalidated', such as when a device
  *  is tracked and then goes out of range.
- *  
- *  ENABLE_TFT
- *  ----------
- *  An ILI9341 based TFT can optionally be used to display proximity 
- *  alerts. The Adafruit TFT Feather Wing is recommended and is the only 
- *  device tested with this functionality.
- *  
- *  ENABLE_OLED
- *  -----------
- *  An SSD1306 128x32 based OLED can optionally be used to display
- *  proximity alerts. The Adafruit OLED Feather Wing is recommended and
- *  is the only device tested with this functionality.
  */
 
 #include <string.h>
@@ -67,8 +39,6 @@
 #define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
-#define ENABLE_TFT     (0)    // Set this to 1 to enable ILI9341 TFT display support
-#define ENABLE_OLED    (0)    // Set this to 1 to enable SSD1306 128x32 OLED display support
 
 
 // Custom UUID used to differentiate this device.
@@ -95,9 +65,15 @@ typedef struct node_record_s
   int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
+
+
 bool connected; // use to see if wearable is connected to central
+bool list_sent;; // indicates whether list has been sent to central
 
 node_record_t records[ARRAY_SIZE];
+
+node_record_t test_list[ARRAY_SIZE];
+
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
@@ -117,6 +93,15 @@ void setup()
     // Set all RSSI values to lowest value for comparison purposes,
     // since 0 would be higher than any valid RSSI value
     records[i].rssi = -128;
+  }
+
+  /* Clear the test_list list */
+  memset(records, 0, sizeof(test_list));
+  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
+  {
+    // Set all RSSI values to lowest value for comparison purposes,
+    // since 0 would be higher than any valid RSSI value
+    test_list[i].rssi = -128;
   }
   
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
@@ -160,9 +145,8 @@ void setup()
    */
   Bluefruit.Scanner.setRxCallback(scan_callback);
   Bluefruit.Scanner.restartOnDisconnect(true);
-  Bluefruit.Scanner.filterRssi(-80);            // Only invoke callback for devices with RSSI >= -80 dBm
+  //Bluefruit.Scanner.filterRssi(-80);            // Only invoke callback for devices with RSSI >= -80 dBm
   Bluefruit.Scanner.filterUuid(uuid);           // Only invoke callback if the target UUID was found
-  //Bluefruit.Scanner.filterMSD(0xFFFF);          // Only invoke callback when MSD is present with the specified Company ID
   Bluefruit.Scanner.setInterval(160, 80);       // in units of 0.625 ms
   Bluefruit.Scanner.useActiveScan(true);        // Request scan response data
   Bluefruit.Scanner.start(0);                   // 0 = Don't stop scanning after n seconds
@@ -171,6 +155,18 @@ void setup()
   // Set up and start advertising
   startAdv();
   Serial.println("Advertising ...");
+
+  list_sent = false;
+  // Setting up test list for transmission
+  test_list[1].rssi = -40;
+  memcpy(test_list[0].name, "D001", 4); // 
+  test_list[2].rssi = -50;
+  memcpy(test_list[1].name, "D002", 4); // 
+  test_list[3].rssi = -60;
+  memcpy(test_list[2].name, "D003", 4); // 
+  test_list[4].rssi = -70;
+  memcpy(test_list[3].name, "D004", 4); // 
+  
 }
 
 void startAdv(void)
@@ -231,13 +227,12 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
   Serial.println();
   Serial.println("Disconnected");
   connected = false;
+  list_sent = false;
 }
 
 void prph_bleuart_rx_callback(uint16_t conn_handle)
 {
   (void) conn_handle;
-
-  
 }
 
 /* This callback handler is fired every time a valid advertising packet is detected */
@@ -264,7 +259,7 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
 
 /* Fully parse and display the advertising packet to the Serial Monitor
  * if verbose/debug output is requested */
-#if VERBOSE_OUTPUT
+#if VERBOSE_OUTPUT // used for debugging
   uint8_t len = 0;
   uint8_t buffer[32];
   memset(buffer, 0, sizeof(buffer));
@@ -294,23 +289,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   /* RSSI value */
   Serial.printf("%14s %d dBm\n", "RSSI", report->rssi);
 
-  /* Adv Type */
-  Serial.printf("%14s ", "ADV TYPE");
-  if ( report->type.connectable )
-  {
-    Serial.print("Connectable ");
-  }else
-  {
-    Serial.print("Non-connectable ");
-  }
-
-  if ( report->type.directed )
-  {
-    Serial.println("directed");
-  }else
-  {
-    Serial.println("undirected");
-  }
 
   /* Shortened Local Name */
   if(Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_SHORT_LOCAL_NAME, buffer, sizeof(buffer)))
@@ -326,62 +304,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
     memset(buffer, 0, sizeof(buffer));
   }
 
-  /* TX Power Level */
-  if (Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_TX_POWER_LEVEL, buffer, sizeof(buffer)))
-  {
-    Serial.printf("%14s %i\n", "TX PWR LEVEL", buffer[0]);
-    memset(buffer, 0, sizeof(buffer));
-  }
-
-  /* Check for UUID16 Complete List */
-  len = Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_16BIT_SERVICE_UUID_COMPLETE, buffer, sizeof(buffer));
-  if ( len )
-  {
-    printUuid16List(buffer, len);
-  }
-
-  /* Check for UUID16 More Available List */
-  len = Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_16BIT_SERVICE_UUID_MORE_AVAILABLE, buffer, sizeof(buffer));
-  if ( len )
-  {
-    printUuid16List(buffer, len);
-  }
-
-  /* Check for UUID128 Complete List */
-  len = Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_128BIT_SERVICE_UUID_COMPLETE, buffer, sizeof(buffer));
-  if ( len )
-  {
-    printUuid128List(buffer, len);
-  }
-
-  /* Check for UUID128 More Available List */
-  len = Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_128BIT_SERVICE_UUID_MORE_AVAILABLE, buffer, sizeof(buffer));
-  if ( len )
-  {
-    printUuid128List(buffer, len);
-  }  
-
-  /* Check for BLE UART UUID */
-  if ( Bluefruit.Scanner.checkReportForUuid(report, BLEUART_UUID_SERVICE) )
-  {
-    Serial.printf("%14s %s\n", "BLE UART", "UUID Found!");
-  }
-
-  /* Check for DIS UUID */
-  if ( Bluefruit.Scanner.checkReportForUuid(report, UUID16_SVC_DEVICE_INFORMATION) )
-  {
-    Serial.printf("%14s %s\n", "DIS", "UUID Found!");
-  }
-
-  /* Check for Manufacturer Specific Data */
-  len = Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA, buffer, sizeof(buffer));
-  if (len)
-  {
-    Serial.printf("%14s ", "MAN SPEC DATA");
-    Serial.printBuffer(buffer, len, '-');
-    Serial.println();
-    memset(buffer, 0, sizeof(buffer));
-  }
 
   Serial.println();
 #endif
@@ -389,35 +311,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   // For Softdevice v6: after received a report, scanner will be paused
   // We need to call Scanner resume() to continue scanning
   Bluefruit.Scanner.resume();
-}
-
-/* Prints a UUID16 list to the Serial Monitor */
-void printUuid16List(uint8_t* buffer, uint8_t len)
-{
-  Serial.printf("%14s %s", "16-Bit UUID");
-  for(int i=0; i<len; i+=2)
-  {
-    uint16_t uuid16;
-    memcpy(&uuid16, buffer+i, 2);
-    Serial.printf("%04X ", uuid16);
-  }
-  Serial.println();
-}
-
-/* Prints a UUID128 list to the Serial Monitor */
-void printUuid128List(uint8_t* buffer, uint8_t len)
-{
-  (void) len;
-  Serial.printf("%14s %s", "128-Bit UUID");
-
-  // Print reversed order
-  for(int i=0; i<16; i++)
-  {
-    const char* fm = (i==4 || i==6 || i==8 || i==10) ? "-%02X" : "%02X";
-    Serial.printf(fm, buffer[15-i]);
-  }
-
-  Serial.println();  
 }
 
 /* Prints the current record list to the Serial Monitor */
@@ -608,26 +501,58 @@ void loop()
   uint8_t buf[4]; // uint8_t buffer to use in wearable.write
   if(connected)
   {
-    for (int i=0; i<ARRAY_SIZE; i++)
+    list_sent = false;
+    Serial.printf(" list sent %d\n",list_sent); // DEBUGGING THIS, THE IF STATEMENT IS TRIGGERED EVEN THOUGH LIST_SENT IS FALSE
+    if(!list_sent); // if list needs to be sent
     {
-      if (records[i].rssi!=-128) // checks to see if there is actually a device in this spot, if not nothing happens
+      Serial.write("Sending list");
+      Serial.println();
+      /*for (int i=0; i<ARRAY_SIZE; i++)
       {
-        memcpy(buf, records[i].name, sizeof(buf)); // copy contents of name to buffer
-        wearable.write(buf, sizeof(buf)); // write name of device
-        memset(buf, 0, sizeof(buf)); // reset buffer
-        //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
-        wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
-        //memset(buf, 0, sizeof(buf)); // reset buffer
-      }
+        if (records[i].rssi!=-128) // checks to see if there is actually a device in this spot, if not nothing happens
+        {
+          
+          // Sending proximity list
+          memcpy(buf, records[i].name, sizeof(buf)); // copy contents of name to buffer
+          wearable.write(buf, sizeof(buf)); // write name of device
+          memset(buf, 0, sizeof(buf)); // reset buffer
+          //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
+          //wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
+          //memset(buf, 0, sizeof(buf)); // reset buffer
+          list_sent=true;
+          counter = millis();
+          Serial.write("List sent!");
+          Serial.println();
+
+          // Sending test list
+          memcpy(buf, test_list[i].name, sizeof(buf)); // copy contents of name to buffer
+          wearable.write(buf, sizeof(buf)); // write name of device
+          memset(buf, 0, sizeof(buf)); // reset buffer
+          //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
+          //wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
+          //memset(buf, 0, sizeof(buf)); // reset buffer
+                    
+        }
+      }*/
+      list_sent=true;
+      Serial.write("List sent!");
+      Serial.println();
+      Serial.printf(" list sent %d\n",list_sent);
     }
   }
+  
+  /*else
+  {
+    Serial.write("List already sent - wait!");
+    Serial.println();
+  }*/
   
   // Forward from Serial to BLEUART
   if (Serial.available())
   {
     // Delay to get enough input data since we have a
     // limited amount of space in the transmit buffer
-    delay(2);
+    delay(20);
  
     uint8_t buf[64];
     int count = Serial.readBytes(buf, sizeof(buf));
@@ -654,13 +579,5 @@ void loop()
     //printRecordList();
     //sendRecordList();
     Serial.println("");
-    /* Display the device list on the TFT if available */
-    #if ENABLE_TFT
-    renderResultsToTFT();
-    #endif
-    /* Display the device list on the OLED if available */
-    #if ENABLE_OLED
-    renderResultsToOLED();
-    #endif
   }
 }

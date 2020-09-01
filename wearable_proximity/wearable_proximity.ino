@@ -148,7 +148,7 @@ void setup()
   //Bluefruit.Scanner.filterRssi(-80);            // Only invoke callback for devices with RSSI >= -80 dBm
   Bluefruit.Scanner.filterUuid(uuid);           // Only invoke callback if the target UUID was found
   Bluefruit.Scanner.setInterval(160, 80);       // in units of 0.625 ms
-  Bluefruit.Scanner.useActiveScan(true);        // Request scan response data
+  Bluefruit.Scanner.useActiveScan(true);        // Request scan response data MAYBE CHANGE THIS TO FALSE / OR MAKE IT SO THAT NAME IS TAKEN FROM SCAN RESPONSE
   Bluefruit.Scanner.start(0);                   // 0 = Don't stop scanning after n seconds
   Serial.println("Scanning ...");
 
@@ -499,11 +499,9 @@ void loop()
   // following block sends names on list over Bluetooth ignoring blank entries
   // Trying to send list over Bluetooth - it works!!
   uint8_t buf[4]; // uint8_t buffer to use in wearable.write
-  if(connected)
+  if(list_sent == false) // checks to see if connected
   {
-    list_sent = false;
-    Serial.printf(" list sent %d\n",list_sent); // DEBUGGING THIS, THE IF STATEMENT IS TRIGGERED EVEN THOUGH LIST_SENT IS FALSE
-    if(!list_sent); // if list needs to be sent
+    if(Bluefruit.connected()); // if list needs to be sent (list_sent is false)
     {
       Serial.write("Sending list");
       Serial.println();
@@ -534,18 +532,17 @@ void loop()
                     
         }
       }*/
-      list_sent=true;
+      list_sent=true; // flags that list has been sent
       Serial.write("List sent!");
       Serial.println();
-      Serial.printf(" list sent %d\n",list_sent);
+      //Serial.printf(" list sent %d\n",list_sent);
     }
   }
-  
-  /*else
+  else if (list_sent == true)
   {
-    Serial.write("List already sent - wait!");
+    Serial.write("List already sent");
     Serial.println();
-  }*/
+  }
   
   // Forward from Serial to BLEUART
   if (Serial.available())

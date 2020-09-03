@@ -12,12 +12,10 @@
  *  This example is intended to be used with multiple peripherals
  *  devices that are advertising with a specific UUID.
  *  
- *  VERBOSE_OUTPUT
- *  --------------
- *  Verbose advertising packet analysis can be enabled for
- *  advertising packet contents to help debug issues with the 
- *  advertising payloads, with fully parsed data displayed in the 
- *  Serial Monitor.
+ *  TODO:
+ *  Make list send only once
+ *  Create RSSI_min and RSSI_max variable in the record struct
+ *  Implement counter or RTC to measure duration of proximity
  *  
  *  ARRAY_SIZE
  *  ----------
@@ -35,8 +33,8 @@
 #include <bluefruit.h>
 #include <ble_gap.h>
 #include <SPI.h>
+#include <stdio.h>
 
-#define VERBOSE_OUTPUT (0)    // Set this to 1 for verbose adv packet output to the serial monitor
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
 
@@ -61,7 +59,10 @@ typedef struct node_record_s
   int8_t   rssi;       // RSSI value
   uint32_t timestamp;  // Timestamp for invalidation purposes
   char name[4];       // Name of detected device
-  uint8_t count;
+  uint8_t duration_60; // variables to count how long they were below a certain RSSI
+  uint8_t duration_70;
+  uint8_t duration_80;
+  uint8_t duration_90;
   int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
@@ -77,6 +78,7 @@ node_record_t test_list[ARRAY_SIZE];
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
+char id[4+1] = "N001";
 
 void setup()
 {
@@ -124,7 +126,7 @@ void setup()
   Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values
 
   /* Set the device name */
-  Bluefruit.setName("D001");
+  Bluefruit.setName(id);
 
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
@@ -216,7 +218,33 @@ void connect_callback(uint16_t conn_handle)
 
   Serial.print("Connected to ");
   Serial.println(peer_name);
-  connected = true;
+  
+  uint8_t buf[4]; // for copying name
+  char str[32]; // for convering int8_t to char array for sending over BLE
+  char sent[4+1] = "SENT";
+  delay(5000); // delay for debugging on phone app
+  
+  wearable.write(id, sizeof(id)); // sends the ID of THIS wearable (works)
+  // Sending list over BLE (works)
+  for (int i=0; i<ARRAY_SIZE; i++)
+  {
+    if(test_list[i].rssi!=-128) // if rssi = -128, it is an empty record so do not send
+    {
+      /*memcpy(buf, test_list[i].name, sizeof(buf)); // copy contents of name to buffer
+      wearable.write(buf, sizeof(buf)); // write name of device
+      memset(buf, 0, sizeof(buf)); // reset buffer
+      sprintf(str, "%i", test_list[i].rssi); // converting RSSI from int to string for sending -  could also use this for putting all info into one line!
+      wearable.write(str); // write rssi of device*/
+
+      //This is another potential way to send each entry all in one line and have Raspberry Pi handle seperation of characters
+      sprintf(str, "%s%s%i", id, test_list[i].name, test_list[i].rssi);
+      wearable.write(str); // write str
+      
+
+    }
+  }
+  //wearable.write(sent); unnecessary but here for debugging
+  Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)
@@ -226,8 +254,7 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
 
   Serial.println();
   Serial.println("Disconnected");
-  connected = false;
-  list_sent = false;
+  //list_sent = false;
 }
 
 void prph_bleuart_rx_callback(uint16_t conn_handle)
@@ -257,57 +284,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
     Serial.println("");
   }
 
-/* Fully parse and display the advertising packet to the Serial Monitor
- * if verbose/debug output is requested */
-#if VERBOSE_OUTPUT // used for debugging
-  uint8_t len = 0;
-  uint8_t buffer[32];
-  memset(buffer, 0, sizeof(buffer));
-
-  /* Display the timestamp and device address */
-  if (report->type.scan_response)
-  {
-    Serial.printf("[SR%10d] Packet received from ", millis());
-  }
-  else
-  {
-    Serial.printf("[ADV%9d] Packet received from ", millis());
-  }
-  // MAC is in little endian --> print reverse
-  Serial.printBufferReverse(report->peer_addr.addr, 6, ':');
-  Serial.println("");
-  
-  /* Raw buffer contents */
-  Serial.printf("%14s %d bytes\n", "PAYLOAD", report->data.len);
-  if (report->data.len)
-  {
-    Serial.printf("%15s", " ");
-    Serial.printBuffer(report->data.p_data, report->data.len, '-');
-    Serial.println();
-  }
-
-  /* RSSI value */
-  Serial.printf("%14s %d dBm\n", "RSSI", report->rssi);
-
-
-  /* Shortened Local Name */
-  if(Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_SHORT_LOCAL_NAME, buffer, sizeof(buffer)))
-  {
-    Serial.printf("%14s %s\n", "SHORT NAME", buffer);
-    memset(buffer, 0, sizeof(buffer));
-  }
-
-  /* Complete Local Name */
-  if(Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)))
-  {
-    Serial.printf("%14s %s\n", "COMPLETE NAME", buffer);
-    memset(buffer, 0, sizeof(buffer));
-  }
-
-
-  Serial.println();
-#endif
-
   // For Softdevice v6: after received a report, scanner will be paused
   // We need to call Scanner resume() to continue scanning
   Bluefruit.Scanner.resume();
@@ -321,7 +297,6 @@ void printRecordList(void)
     Serial.printf("[%i] ", i);
     //Serial.printBuffer(records[i].addr, 6, ':');
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i ",records[i].count);
     Serial.printf("%i (%u ms)\n", records[i].rssi, records[i].timestamp);
   }
 }
@@ -374,10 +349,10 @@ int invalidateRecords(void)
     {
       if (millis() - records[i].timestamp >= TIMEOUT_MS)
       {
-        /* Record has expired, zero it out */
-        memset(&records[i], 0, sizeof(node_record_t));
+        /* Record has expired, zero it out - update: do not invalidate any records */
+        /*memset(&records[i], 0, sizeof(node_record_t));
         records[i].rssi = -128;
-        match++;
+        match++;*/
       }
     }
   }
@@ -459,7 +434,6 @@ int insertRecord(node_record_t *record)
     if (match)
     {
       memcpy(&records[i], record, sizeof(node_record_t));
-      records[i].count += 1;
       goto sort_then_exit;
     }
   }
@@ -495,55 +469,6 @@ sort_then_exit:
 void loop() 
 {
 
-
-  // following block sends names on list over Bluetooth ignoring blank entries
-  // Trying to send list over Bluetooth - it works!!
-  uint8_t buf[4]; // uint8_t buffer to use in wearable.write
-  if(list_sent == false) // checks to see if connected
-  {
-    if(Bluefruit.connected()); // if list needs to be sent (list_sent is false)
-    {
-      Serial.write("Sending list");
-      Serial.println();
-      /*for (int i=0; i<ARRAY_SIZE; i++)
-      {
-        if (records[i].rssi!=-128) // checks to see if there is actually a device in this spot, if not nothing happens
-        {
-          
-          // Sending proximity list
-          memcpy(buf, records[i].name, sizeof(buf)); // copy contents of name to buffer
-          wearable.write(buf, sizeof(buf)); // write name of device
-          memset(buf, 0, sizeof(buf)); // reset buffer
-          //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
-          //wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
-          //memset(buf, 0, sizeof(buf)); // reset buffer
-          list_sent=true;
-          counter = millis();
-          Serial.write("List sent!");
-          Serial.println();
-
-          // Sending test list
-          memcpy(buf, test_list[i].name, sizeof(buf)); // copy contents of name to buffer
-          wearable.write(buf, sizeof(buf)); // write name of device
-          memset(buf, 0, sizeof(buf)); // reset buffer
-          //memcpy(buf, records[i].count, sizeof(buf)); // copy count integer to buffer
-          //wearable.write(records[i].count); // write count of device from list - this does send it but count doesn't work as I thought it would
-          //memset(buf, 0, sizeof(buf)); // reset buffer
-                    
-        }
-      }*/
-      list_sent=true; // flags that list has been sent
-      Serial.write("List sent!");
-      Serial.println();
-      //Serial.printf(" list sent %d\n",list_sent);
-    }
-  }
-  else if (list_sent == true)
-  {
-    Serial.write("List already sent");
-    Serial.println();
-  }
-  
   // Forward from Serial to BLEUART
   if (Serial.available())
   {

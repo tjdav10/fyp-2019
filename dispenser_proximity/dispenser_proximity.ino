@@ -75,23 +75,14 @@ void scan_callback(ble_gap_evt_adv_report_t* report) // needs to be modified
  */
 void connect_callback(uint16_t conn_handle) // needs to be modified
 {
-  Serial.println("Connected");
-  Serial.print("Discovering BLE Uart Service ... ");
-  if ( clientUart.discover(conn_handle) )
-  {
-    Serial.println("Found it");
+  // Get the reference to current connection
+  BLEConnection* connection = Bluefruit.Connection(conn_handle);
 
-    Serial.println("Enable TXD's notify");
-    clientUart.enableTXD();
+  char peer_name[32] = { 0 };
+  connection->getPeerName(last_connected, sizeof(last_connected));
 
-    Serial.println("Ready to receive from peripheral");
-  }else
-  {
-    Serial.println("Found NONE");
-    
-    // disconnect since we couldn't find bleuart service
-    Bluefruit.disconnect(conn_handle);
-  }  
+  Serial.print("Connected to ");
+  Serial.println(last_connected);
 }
 
 /**
@@ -127,10 +118,8 @@ void bleuart_rx_callback(BLEClientUart& uart_svc)
 void loop() {
   // put your main code here, to run repeatedly:
 
-
-
-
-    // Forward from Serial to BLEUART
+    // Forward from Serial to BLEUART - not necessary at the moment
+    /*
   if (Serial.available())
   {
     // Delay to get enough input data since we have a
@@ -141,6 +130,7 @@ void loop() {
     int count = Serial.readBytes(buf, sizeof(buf));
     clientUart.write( buf, count );
   }
+  */
  
   // Forward from BLEUART to Serial
   if ( clientUart.available() )

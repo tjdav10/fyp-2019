@@ -223,7 +223,6 @@ void connect_callback(uint16_t conn_handle)
   char str[32]; // for convering int8_t to char array for sending over BLE
   char sent[4+1] = "SENT";
   delay(5000); // delay for debugging on phone app
-  
   wearable.write(id, sizeof(id)); // sends the ID of THIS wearable (works)
   // Sending list over BLE (works)
   for (int i=0; i<ARRAY_SIZE; i++)
@@ -244,7 +243,7 @@ void connect_callback(uint16_t conn_handle)
     }
   }
   //wearable.write(sent); unnecessary but here for debugging
-  Bluefruit.disconnect(conn_handle); // disconnects once list is sent
+  //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)

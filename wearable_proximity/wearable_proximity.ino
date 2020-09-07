@@ -12,6 +12,7 @@
  *  TODO:
  *  Implement counter or RTC to measure duration of proximity
  *  Increase number of available spots on list and compare memory size needed
+ *  Implement final Kalman filter (and write kalman filter function)
  *  
  *  ARRAY_SIZE
  *  ----------
@@ -225,20 +226,17 @@ void connect_callback(uint16_t conn_handle)
   uint8_t buf[4]; // for copying name
   char str[32]; // for convering int8_t to char array for sending over BLE
   char sent[4+1] = "SENT";
+  char delim = ':';
   delay(1000); // delay for debugging on phone app
   // Sending list over BLE (works)
   for (int i=0; i<ARRAY_SIZE; i++)
   {
     if(test_list[i].rssi!=-128) // if rssi = -128, it is an empty record so do not send
     {
-      /*memcpy(buf, test_list[i].name, sizeof(buf)); // copy contents of name to buffer
-      wearable.write(buf, sizeof(buf)); // write name of device
-      memset(buf, 0, sizeof(buf)); // reset buffer
-      sprintf(str, "%i", test_list[i].rssi); // converting RSSI from int to string for sending -  could also use this for putting all info into one line!
-      wearable.write(str); // write rssi of device*/
-
-      //This is another potential way to send each entry all in one line and have Raspberry Pi handle seperation of characters
-      sprintf(str, ": %s%.4s %i %i %i ", id, test_list[i].name, test_list[i].min_rssi, test_list[i].max_rssi, test_list[i].count); // u is unsigned decimal integer
+      //This combines all fields from the record into a single string for transmission
+      //sprintf(str, "%s%.4s %i %i %i", id, test_list[i].name, test_list[i].min_rssi, test_list[i].max_rssi, test_list[i].count); // can only send 20 bytes at a time
+      //wearable.write(delim); // send delimiter to differntiate between records
+      sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
       wearable.write(str); // write str
     }
   }

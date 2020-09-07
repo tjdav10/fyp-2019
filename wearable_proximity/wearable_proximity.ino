@@ -5,24 +5,20 @@
  *  in range by their RSSI value, which is an approximate indicator of
  *  proximity (though highly dependent on environmental obstacles, etc.).
  *  
- *  A simple 'bubble sort' algorithm is used, along with a simple
- *  set of decisions about whether and where to insert new records
- *  in the record list.
  *  
  *  This example is intended to be used with multiple peripherals
  *  devices that are advertising with a specific UUID.
  *  
  *  TODO:
- *  Make list send only once
- *  Create RSSI_min and RSSI_max variable in the record struct
  *  Implement counter or RTC to measure duration of proximity
+ *  Increase number of available spots on list and compare memory size needed
  *  
  *  ARRAY_SIZE
  *  ----------
  *  The numbers of peripherals tracked and sorted can be set via the
  *  ARRAY_SIZE macro. Must be at least 2.
  *  
- *  TIMEOUT_MS
+ *  TIMEOUT_MS - not needed as they will never be removed
  *  ----------
  *  This value determines the number of milliseconds before a tracked
  *  peripheral has it's last sample 'invalidated', such as when a device
@@ -56,14 +52,13 @@ BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 typedef struct node_record_s
 {
   uint8_t  addr[6];    // Six byte device address
-  int8_t   rssi;       // RSSI value
+  int8_t rssi; // current RSSI
+  int8_t   min_rssi;       // min RSSI value
+  int8_t max_rssi; // max RSSI value
   uint32_t timestamp;  // Timestamp for invalidation purposes
   char name[4];       // Name of detected device
-  uint8_t duration_60; // variables to count how long they were below a certain RSSI
-  uint8_t duration_70;
-  uint8_t duration_80;
-  uint8_t duration_90;
-  int8_t   reserved;   // Padding for word alignment
+  //int8_t   reserved;   // Padding for word alignment
+  int8_t count;
 } node_record_t;
 
 
@@ -101,9 +96,9 @@ void setup()
   memset(records, 0, sizeof(test_list));
   for (uint8_t i = 0; i<ARRAY_SIZE; i++)
   {
-    // Set all RSSI values to lowest value for comparison purposes,
+    // Set all RSSI values to lowest value (-128) for comparison purposes,
     // since 0 would be higher than any valid RSSI value
-    test_list[i].rssi = -128;
+    test_list[i].rssi = 60; // changed to 60 for debugging
   }
   
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
@@ -160,14 +155,22 @@ void setup()
 
   list_sent = false;
   // Setting up test list for transmission
-  test_list[1].rssi = -40;
+  test_list[0].min_rssi = -40;
+  test_list[0].max_rssi = -100;
   memcpy(test_list[0].name, "D001", 4); // 
-  test_list[2].rssi = -50;
+  test_list[0].count = 5000;
+  test_list[1].min_rssi = -50;
+  test_list[1].max_rssi = -100;
   memcpy(test_list[1].name, "D002", 4); // 
-  test_list[3].rssi = -60;
+  test_list[1].count = 5000;
+  test_list[2].min_rssi = -60;
+  test_list[2].max_rssi = -100;
   memcpy(test_list[2].name, "D003", 4); // 
-  test_list[4].rssi = -70;
+  test_list[2].count = 5000;
+  test_list[3].min_rssi = -70;
+  test_list[3].max_rssi = -100;
   memcpy(test_list[3].name, "D004", 4); // 
+  test_list[3].count = 5000;
   
 }
 
@@ -222,8 +225,7 @@ void connect_callback(uint16_t conn_handle)
   uint8_t buf[4]; // for copying name
   char str[32]; // for convering int8_t to char array for sending over BLE
   char sent[4+1] = "SENT";
-  delay(5000); // delay for debugging on phone app
-  wearable.write(id, sizeof(id)); // sends the ID of THIS wearable (works)
+  delay(1000); // delay for debugging on phone app
   // Sending list over BLE (works)
   for (int i=0; i<ARRAY_SIZE; i++)
   {
@@ -236,10 +238,8 @@ void connect_callback(uint16_t conn_handle)
       wearable.write(str); // write rssi of device*/
 
       //This is another potential way to send each entry all in one line and have Raspberry Pi handle seperation of characters
-      sprintf(str, "%s%s%i", id, test_list[i].name, test_list[i].rssi);
+      sprintf(str, ": %s%.4s %i %i %i ", id, test_list[i].name, test_list[i].min_rssi, test_list[i].max_rssi, test_list[i].count); // u is unsigned decimal integer
       wearable.write(str); // write str
-      
-
     }
   }
   //wearable.write(sent); unnecessary but here for debugging
@@ -303,6 +303,7 @@ void printRecordList(void)
 /* This function performs a simple bubble sort on the records array */
 /* It's slow, but relatively easy to understand */
 /* Sorts based on RSSI values, where the strongest signal appears highest in the list */
+/*
 void bubbleSort(void)
 {
   int inner, outer;
@@ -321,6 +322,7 @@ void bubbleSort(void)
     }
   }
 }
+*/
 
 /*  This function will check if any records in the list
  *  have expired and need to be invalidated, such as when
@@ -357,11 +359,13 @@ int invalidateRecords(void)
   }
 
   /* Resort the list if something was zero'ed out */
+  /*
   if (match)
   {
     // Serial.printf("Invalidated %i records!\n", match);
     bubbleSort();    
   }
+  */
 
   return match;
 }
@@ -419,7 +423,7 @@ int insertRecord(node_record_t *record)
   /* 1. Bubble Sort 
    *    This puts the lists in a known state where we can make
    *    certain assumptions about the last record in the array. */
-  bubbleSort();
+  //bubbleSort();
 
   /* 2. Check for a match on existing device address */
   /*    Replace it if a match is found, then sort */
@@ -450,18 +454,20 @@ int insertRecord(node_record_t *record)
 
   /* 4. Check RSSI of the lowest record */
   /*    Replace if >=, then sort */
+  /*
   if (records[ARRAY_SIZE-1].rssi <= record->rssi)
   {
       memcpy(&records[ARRAY_SIZE-1], record, sizeof(node_record_t));
       goto sort_then_exit;
   }
+  */
 
   /* Nothing to do ... RSSI is lower than the last value, exit and ignore */
   return 0;
 
 sort_then_exit:
   /* Bubble sort */
-  bubbleSort();
+  //bubbleSort();
   return 1;
 }
 

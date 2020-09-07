@@ -1,3 +1,9 @@
+/*
+ * TODO
+ * Make it so that it doesn't immediately reconnect to wearable - subject to testing
+ * 
+ */
+
 #include <bluefruit.h>
  
 BLEClientUart clientUart; // bleuart client
@@ -112,7 +118,7 @@ void bleuart_rx_callback(BLEClientUart& uart_svc)
     Serial.print( (char) uart_svc.read() );
   }
  
-  //Serial.println();
+  Serial.println();
 }
  
 void loop()

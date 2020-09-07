@@ -65,7 +65,7 @@ void setup()
  */
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {
-  
+  delay(200);
   // UUID is already filtered so just need to check ID of last wearable connected to
 
   uint8_t buffer[4]; // used for names of 4 chars long
@@ -78,15 +78,16 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   Serial.printf("str = %s\n", str);
   Serial.printf("last_conn = %s\n", last_conn);
   Serial.println();
-  if(strcmp(name, last_conn)!=0) // if name and last_conn are different, connect to the device
+  //if(strcmp(name, last_conn)!=0) // if name and last_conn are different, connect to the device
   {
     Bluefruit.Central.connect(report);
   }
-
+  /*
   else
   {
     Bluefruit.Scanner.resume(); // if recently connected to, start scanning again
   }
+  */
 }
  
 /**

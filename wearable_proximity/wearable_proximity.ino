@@ -10,13 +10,14 @@
  *  devices that are advertising with a specific UUID.
  *  
  *  TODO:
- *  Implement counter or RTC to measure duration of proximity
+ *  Implement counter or RTC to measure duration of proximity - pseudocode written
+ *  Log date of interaction using RTC
  *  Increase number of available spots on list and compare memory size needed
- *  Implement final Kalman filter (and write kalman filter function)
+ *  Implement final Kalman filter - pretty much done just need to test
  *  
  *  ARRAY_SIZE
  *  ----------
- *  The numbers of peripherals tracked and sorted can be set via the
+ *  The numbers of peripherals tracked can be set via the
  *  ARRAY_SIZE macro. Must be at least 2.
  *  
  *  TIMEOUT_MS - not needed as they will never be removed
@@ -31,6 +32,7 @@
 #include <ble_gap.h>
 #include <SPI.h>
 #include <stdio.h>
+#include <math.h>
 
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
@@ -54,22 +56,45 @@ typedef struct node_record_s
 {
   uint8_t  addr[6];    // Six byte device address
   int8_t rssi; // current RSSI
-  int8_t   min_rssi;       // min RSSI value
-  int8_t max_rssi; // max RSSI value
+  int8_t   filtered_rssi;       // min RSSI value
   uint32_t timestamp;  // Timestamp for invalidation purposes
+  uint32_t first; // first timestamp
+  uint32_t duration; //duration of contact (non RTC)
   char name[4];       // Name of detected device
   //int8_t   reserved;   // Padding for word alignment
-  int8_t count;
+  uint32_t count;
 } node_record_t;
 
+// Kalman struct for tracking parameters - make an array equal to ARRAY_SIZE and populate it with kalman structs - reset the array when list is reset as well
+typedef struct kalman {
+  // Parameters
+  float meas_uncertainty;
+  float est_uncertainty;
+  float q;
+  // Variables
+  float prev_est;
+  float cur_est;
+  float kal_gain;
+  int8_t filtered;
+  int8_t raw;
+} kal;
 
+// 32 to be replaced when RTC arrives
+struct date_time {
+  char date[32];
+  char first_time_70[32];
+  char time_left_70[32];
+};
 
-bool connected; // use to see if wearable is connected to central
-bool list_sent;; // indicates whether list has been sent to central
 
 node_record_t records[ARRAY_SIZE];
 
 node_record_t test_list[ARRAY_SIZE];
+
+// Creating array of kalman filter objects
+kal kalmans[ARRAY_SIZE];
+
+// Creating array for tracking timestamps etc
 
 
 // Add BLE services
@@ -100,6 +125,12 @@ void setup()
     // Set all RSSI values to lowest value (-128) for comparison purposes,
     // since 0 would be higher than any valid RSSI value
     test_list[i].rssi = 60; // changed to 60 for debugging
+  }
+
+  // Setting up parameters for kalman filter
+  for(int i=0; i<ARRAY_SIZE; i++)
+  {
+    setUpKalman(&kalmans[i]);
   }
   
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
@@ -154,22 +185,13 @@ void setup()
   startAdv();
   Serial.println("Advertising ...");
 
-  list_sent = false;
-  // Setting up test list for transmission
-  test_list[0].min_rssi = -40;
-  test_list[0].max_rssi = -100;
+  // Setting up test list for transmission (testing)
   memcpy(test_list[0].name, "D001", 4); // 
   test_list[0].count = 5000;
-  test_list[1].min_rssi = -50;
-  test_list[1].max_rssi = -100;
   memcpy(test_list[1].name, "D002", 4); // 
   test_list[1].count = 5000;
-  test_list[2].min_rssi = -60;
-  test_list[2].max_rssi = -100;
   memcpy(test_list[2].name, "D003", 4); // 
   test_list[2].count = 5000;
-  test_list[3].min_rssi = -70;
-  test_list[3].max_rssi = -100;
   memcpy(test_list[3].name, "D004", 4); // 
   test_list[3].count = 5000;
   
@@ -225,22 +247,18 @@ void connect_callback(uint16_t conn_handle)
   
   uint8_t buf[4]; // for copying name
   char str[32]; // for convering int8_t to char array for sending over BLE
-  char sent[4+1] = "SENT";
-  char delim = ':';
-  delay(1000); // delay for debugging on phone app
+  delay(1000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
   // Sending list over BLE (works)
   for (int i=0; i<ARRAY_SIZE; i++)
   {
-    if(test_list[i].rssi!=-128) // if rssi = -128, it is an empty record so do not send
+    if(test_list[1].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
     {
       //This combines all fields from the record into a single string for transmission
       //sprintf(str, "%s%.4s %i %i %i", id, test_list[i].name, test_list[i].min_rssi, test_list[i].max_rssi, test_list[i].count); // can only send 20 bytes at a time
-      //wearable.write(delim); // send delimiter to differntiate between records
       sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
       wearable.write(str); // write str
     }
   }
-  //wearable.write(sent); unnecessary but here for debugging
   //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
@@ -271,7 +289,6 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
   memcpy(record.name, buffer, 4); // copy contents of buffer to name field
   memset(buffer, 0, sizeof(buffer)); // reset buffer
-  //Serial.println(record.name);
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
 
   /* Attempt to insert the record into the list */
@@ -298,29 +315,6 @@ void printRecordList(void)
   }
 }
 
-/* This function performs a simple bubble sort on the records array */
-/* It's slow, but relatively easy to understand */
-/* Sorts based on RSSI values, where the strongest signal appears highest in the list */
-/*
-void bubbleSort(void)
-{
-  int inner, outer;
-  node_record_t temp;
-
-  for(outer=0; outer<ARRAY_SIZE-1; outer++)
-  {
-    for(inner=outer+1; inner<ARRAY_SIZE; inner++)
-    {
-      if(records[outer].rssi < records[inner].rssi)
-      {
-        memcpy((void *)&temp, (void *)&records[outer], sizeof(node_record_t));           // temp=records[outer];
-        memcpy((void *)&records[outer], (void *)&records[inner], sizeof(node_record_t)); // records[outer] = records[inner];
-        memcpy((void *)&records[inner], (void *)&temp, sizeof(node_record_t));           // records[inner] = temp;
-      }
-    }
-  }
-}
-*/
 
 /*  This function will check if any records in the list
  *  have expired and need to be invalidated, such as when
@@ -329,102 +323,58 @@ void bubbleSort(void)
  *  Returns the number of invalidated records, or 0 if
  *  nothing was changed.
  */
-int invalidateRecords(void)
+int invalidateRecords(void) // this doesn't do anything anymore but keeping it in so rest of program works
 {
+/*
   uint8_t i;
   uint8_t buffer[4+1]; // used for names of 4 chars long
   int match = 0;
 
-  /* Not enough time has elapsed to avoid an underflow error */
+
   if (millis() <= TIMEOUT_MS)
   {
     return 0;
   }
 
-  /* Check if any records have expired */
+
   for (i=0; i<ARRAY_SIZE; i++)
   {
     if (records[i].timestamp) // Ignore zero"ed records
     {
       if (millis() - records[i].timestamp >= TIMEOUT_MS)
       {
-        /* Record has expired, zero it out - update: do not invalidate any records */
-        /*memset(&records[i], 0, sizeof(node_record_t));
+
+        memset(&records[i], 0, sizeof(node_record_t));
         records[i].rssi = -128;
-        match++;*/
+        match++;
       }
     }
   }
 
-  /* Resort the list if something was zero'ed out */
-  /*
+
+
   if (match)
   {
-    // Serial.printf("Invalidated %i records!\n", match);
-    bubbleSort();    
+    // Serial.printf("Invalidated %i records!\n", match);    
   }
-  */
 
-  return match;
+*/
+  //return match;
+  return 0;
 }
 
-/* This function attempts to insert the record if it is larger than the smallest valid RSSI entry */
+/* This function attempts to insert the record if there is room */
 /* Returns 1 if a change was made, otherwise 0 */
 int insertRecord(node_record_t *record)
 {
   uint8_t i;
   
   /* Invalidate results older than n milliseconds */
-  invalidateRecords();
+  //invalidateRecords();
   
-  /*  Record Insertion Workflow:
-   *  
-   *            START
-   *              |
-   *             \ /
-   *        +-------------+
-   *  1.    | BUBBLE SORT |   // Put list in known state!
-   *        +-------------+
-   *              |
-   *        _____\ /_____
-   *       /    ENTRY    \    YES
-   *  2. <  EXISTS W/THIS > ------------------+
-   *       \   ADDRESS?  /                    |
-   *         -----------                      |
-   *              | NO                        |
-   *              |                           |
-   *       ______\ /______                    |
-   *      /      IS       \   YES             |
-   *  3. < THERE A ZERO'ED >------------------+
-   *      \    RECORD?    /                   |
-   *        -------------                     |
-   *              | NO                        |
-   *              |                           |
-   *       ______\ /________                  |
-   *     /     IS THE       \ YES             |
-   *  4.<  RECORD'S RSSI >=  >----------------|
-   *     \ THE LOWEST RSSI? /                 |
-   *       ----------------                   |
-   *              | NO                        |
-   *              |                           |
-   *             \ /                         \ /
-   *      +---------------+           +----------------+
-   *      | IGNORE RECORD |           | REPLACE RECORD |
-   *      +---------------+           +----------------+
-   *              |                           |
-   *              |                          \ /
-   *             \ /                  +----------------+
-   *             EXIT  <------------- |   BUBBLE SORT  |
-   *                                  +----------------+
-   */  
 
-  /* 1. Bubble Sort 
-   *    This puts the lists in a known state where we can make
-   *    certain assumptions about the last record in the array. */
-  //bubbleSort();
-
-  /* 2. Check for a match on existing device address */
-  /*    Replace it if a match is found, then sort */
+  /*    Check for a match on existing device address */
+  /*    Replace it if a match is found */
   uint8_t match = 0;
   for (i=0; i<ARRAY_SIZE; i++)
   {
@@ -434,44 +384,86 @@ int insertRecord(node_record_t *record)
     }
     if (match)
     {
+      // Update raw RSSI then filter
+      updateRaw(&kalmans[i], record->rssi);
+      filter(&kalmans[i]);
+      record->filtered_rssi = kalmans[i].filtered;
+
+      void updateDuration();
+
+      // If previous -70 timestamp is earlier than current one, keep the old (OR MIGHT JUST KEEP THE ORIGINAL NO MATTER WHAT?)
+      // Or if formatted as string can do strcmp just to check difference. Will depend on output from RTC
+      /*pseudo code
+       * if (records[i].timestamp < record->timestamp)
+       *  {
+       *    record->timestamp = records[i].timestamp  //(or do memcpy)
+       *  }
+       * 
+       * 
+       */
+            
       memcpy(&records[i], record, sizeof(node_record_t));
+    
+      
       goto sort_then_exit;
     }
   }
 
-  /* 3. Check for zero'ed records */
-  /*    Insert if a zero record is found, then sort */
+  /*    Check for zero'ed records */
+  /*    Insert if a zero record is found */
   for (i=0; i<ARRAY_SIZE; i++)
   {
     if (records[i].rssi == -128)
     {
+      // Update raw RSSI then filter
+      updateRaw(&kalmans[i], record->rssi);
+      filter(&kalmans[i]);
+      record->filtered_rssi = kalmans[i].filtered;
+      
       memcpy(&records[i], record, sizeof(node_record_t));
+      
       goto sort_then_exit;
     }
   }
 
-  /* 4. Check RSSI of the lowest record */
-  /*    Replace if >=, then sort */
-  /*
-  if (records[ARRAY_SIZE-1].rssi <= record->rssi)
-  {
-      memcpy(&records[ARRAY_SIZE-1], record, sizeof(node_record_t));
-      goto sort_then_exit;
-  }
-  */
 
-  /* Nothing to do ... RSSI is lower than the last value, exit and ignore */
+  // Nothing to do ... list must be full and this interaction is missed :(
   return 0;
 
 sort_then_exit:
-  /* Bubble sort */
-  //bubbleSort();
-  return 1;
+  return 1; // returning 1 means list has been updated
+}
+
+// Kalman filter function
+void filter(kal *k) // pass by reference to save memory
+{
+  k->kal_gain = k->est_uncertainty/(k->est_uncertainty + k->meas_uncertainty); // compute kalman gain
+  k->cur_est = k->prev_est + k->kal_gain*(k->raw - k->prev_est); // compute estimate for current time step
+  k->est_uncertainty = (1 - k->kal_gain)*k->est_uncertainty + abs(k->prev_est - k->cur_est)*k->q; // update estimate uncertainty
+  k->prev_est = k->cur_est; // update previous estimate for next loop iteration
+  k->filtered = k->cur_est;
+}
+
+void setUpKalman(kal *k) // parameters need to be updated
+{
+  k->meas_uncertainty = 1;
+  k->est_uncertainty = 1;
+  k->q = 1;
+}
+
+void updateRaw(kal *k, uint8_t rssi)
+{
+  k->raw = rssi;
+}
+
+void updateDuration(node_record_t *record)
+{
+  uint32_t now = millis();
+  record->duration = abs(now - record->timestamp);
 }
 
 void loop() 
 {
-
   // Forward from Serial to BLEUART
   if (Serial.available())
   {
@@ -502,7 +494,6 @@ void loop()
   {
     /* The list was updated, print the new values */
     //printRecordList();
-    //sendRecordList();
     Serial.println("");
   }
 }

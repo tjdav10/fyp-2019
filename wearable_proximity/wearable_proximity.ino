@@ -290,12 +290,10 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   memcpy(record.name, buffer, 4); // copy contents of buffer to name field
   memset(buffer, 0, sizeof(buffer)); // reset buffer
   record.timestamp = millis();                    /* Set the timestamp (approximate) */
-
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
   {
     printRecordList();                            /* The list was updated, print the new values */
-    Serial.println("");
   }
 
   // For Softdevice v6: after received a report, scanner will be paused
@@ -311,7 +309,7 @@ void printRecordList(void)
     Serial.printf("[%i] ", i);
     //Serial.printBuffer(records[i].addr, 6, ':');
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u ms)\n", records[i].rssi, records[i].timestamp);
+    Serial.printf("%i (%u ms)\n", records[i].filtered_rssi, records[i].timestamp);
   }
 }
 
@@ -413,7 +411,7 @@ int insertRecord(node_record_t *record)
   /*    Insert if a zero record is found */
   for (i=0; i<ARRAY_SIZE; i++)
   {
-    if (records[i].rssi == -128)
+    if (records[i].name[0] == 0)
     {
       // Update raw RSSI then filter
       updateRaw(&kalmans[i], record->rssi);
@@ -490,10 +488,10 @@ void loop()
    * can lead to list corruption as-is if the scann results
    * callback is fired in the middle of the invalidation
    * function. */
-  if (invalidateRecords())
+  //if (invalidateRecords())
   {
     /* The list was updated, print the new values */
     //printRecordList();
-    Serial.println("");
+    //Serial.println("");
   }
 }

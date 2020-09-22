@@ -11,8 +11,11 @@ var_rssi = var(data);
 meas_uncertainty = var_rssi; % measurement uncertainty (covariance of signal)
 est_uncertainty = meas_uncertainty; % estimate uncertainty (set same as meas_uncertainty initially. is updated in the filter)
 R = 0.00000001; % process noise
+% reduce the process noise
+% try varying the advertising intervals to make it faster
 
 window_size = 30; % set window size for moving average filter
+% increase the advertising interval
 
 % temporary
 % meas = 0;

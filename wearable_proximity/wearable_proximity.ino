@@ -6,14 +6,20 @@
  *  proximity (though highly dependent on environmental obstacles, etc.).
  *  
  *  
- *  This example is intended to be used with multiple peripherals
- *  devices that are advertising with a specific UUID.
+ *  This example is intended to be used with multiple peripheral
+ *  devices that are also running this program but with different names.
  *  
  *  TODO:
  *  Implement counter or RTC to measure duration of proximity - pseudocode written
+ *    Duration counting doesn't really work without RTC as the millis() function is delayed - need the RTC to consistently count time
+ *  
  *  Log date of interaction using RTC
+ *  
  *  Increase number of available spots on list and compare memory size needed
- *  Implement final Kalman filter - pretty much done just need to test
+ *  
+ *  Implement final Kalman filter - pretty much done just need to test seperately then implement here
+ *  
+ *  Add battery level checking and transmission from batteryExampleCode.ino - done but need to test
  *  
  *  ARRAY_SIZE
  *  ----------
@@ -94,8 +100,16 @@ node_record_t test_list[ARRAY_SIZE];
 // Creating array of kalman filter objects
 kal kalmans[ARRAY_SIZE];
 
-// Creating array for tracking timestamps etc
 
+
+
+// Battery level variables
+int adcin    = A6;  // A6 == VDIV is for battery voltage monitoring 
+int adcvalue = 0;
+float mv_per_lsb = 3600.0F/4096.0F; // 12-bit ADC with 3.6V input range
+                                    //the default analog reference voltage is 3.6 V
+float v_max = 4.00; // the maximum battery voltage
+float v_min = 3.70; // min battery voltage
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
@@ -150,7 +164,7 @@ void setup()
     Serial.println("Bluefruit initialized (central mode)");
   }
   
-  Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values
+  Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values (+4)
 
   /* Set the device name */
   Bluefruit.setName(id);
@@ -228,7 +242,7 @@ void startAdv(void)
    * https://developer.apple.com/library/content/qa/qa1931/_index.html
    */
   Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(32, 244);    // in units of 0.625 ms
+  Bluefruit.Advertising.setInterval(32, 244);    // in units of 0.625 ms (152.5ms = 244*0.625) (probably a bit too fast)
   Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
   Bluefruit.Advertising.start();
 }
@@ -246,7 +260,7 @@ void connect_callback(uint16_t conn_handle)
   Serial.println(peer_name);
   
   uint8_t buf[4]; // for copying name
-  char str[32]; // for convering int8_t to char array for sending over BLE
+  char str[32]; // for converting int8_t to char array for sending over BLE
   delay(1000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
   // Sending list over BLE (works)
   for (int i=0; i<ARRAY_SIZE; i++)
@@ -254,11 +268,19 @@ void connect_callback(uint16_t conn_handle)
     if(test_list[1].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
     {
       //This combines all fields from the record into a single string for transmission
-      //sprintf(str, "%s%.4s %i %i %i", id, test_list[i].name, test_list[i].min_rssi, test_list[i].max_rssi, test_list[i].count); // can only send 20 bytes at a time
       sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
       wearable.write(str); // write str
     }
   }
+  
+  memset(str, 0, sizeof(str)); // clear the str buffer
+  
+  // Sending battery information
+  adcvalue = analogRead(adcin);
+  sprintf(str, "B %.4s %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
+  wearable.write(str);
+
+  memset(str, 0, sizeof(str)); // clear the str buffer
   //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
@@ -309,7 +331,7 @@ void printRecordList(void)
     Serial.printf("[%i] ", i);
     //Serial.printBuffer(records[i].addr, 6, ':');
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u ms)\n", records[i].filtered_rssi, records[i].timestamp);
+    Serial.printf("%i (%u ms)\n", records[i].filtered_rssi, records[i].duration);
   }
 }
 

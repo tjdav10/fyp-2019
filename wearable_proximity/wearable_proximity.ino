@@ -109,7 +109,7 @@ int adcvalue = 0;
 float mv_per_lsb = 3600.0F/4096.0F; // 12-bit ADC with 3.6V input range
                                     //the default analog reference voltage is 3.6 V
 float v_max = 4.00; // the maximum battery voltage
-float v_min = 3.70; // min battery voltage
+float v_min = 3.00; // min battery voltage
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
@@ -122,6 +122,8 @@ void setup()
 
   Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");
+
+  analogReadResolution(12); // Can be 8, 10, 12 or 14
 
   /* Clear the results list */
   memset(records, 0, sizeof(records));
@@ -263,21 +265,21 @@ void connect_callback(uint16_t conn_handle)
   char str[32]; // for converting int8_t to char array for sending over BLE
   delay(1000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
   // Sending list over BLE (works)
-  for (int i=0; i<ARRAY_SIZE; i++)
-  {
-    if(test_list[1].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
-    {
-      //This combines all fields from the record into a single string for transmission
-      sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
-      wearable.write(str); // write str
-    }
-  }
+//  for (int i=0; i<ARRAY_SIZE; i++)
+//  {
+//    if(test_list[1].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+//    {
+//      //This combines all fields from the record into a single string for transmission
+//      sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
+//      wearable.write(str); // write str
+//    }
+//  }
   
   memset(str, 0, sizeof(str)); // clear the str buffer
   
   // Sending battery information
   adcvalue = analogRead(adcin);
-  sprintf(str, "B %.4s %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
+  sprintf(str, "B %.4s %.2f %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
   wearable.write(str);
 
   memset(str, 0, sizeof(str)); // clear the str buffer

@@ -1,4 +1,13 @@
+/* Use this for developing kalman filter/tuning
+ *  Log:
+ *  It seems like variance of the measurement noise is too high - it means filter response is too slow
+ * 
+ * 
+ */
+
+
 #include <bluefruit.h>
+#include <math.h>
 
 const uint8_t CUSTOM_UUID[] =
 {
@@ -7,13 +16,33 @@ const uint8_t CUSTOM_UUID[] =
 };
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
+// Kalman struct for tracking parameters - make an array equal to ARRAY_SIZE and populate it with kalman structs - reset the array when list is sent as well
+typedef struct kalman {
+  // Parameters
+  float meas_uncertainty;
+  float est_uncertainty;
+  float q;
+  // Variables
+  float prev_est;
+  float cur_est;
+  float kal_gain;
+  float out;
+  int8_t meas;
+} kal;
+
+kal test;
+
 void setup()
 {
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 
-  Serial.println("RSSI test program");
-  Serial.println("------------------------\n");
+  Serial.println("raw kalman");
+
+  
+  test.meas_uncertainty = 1;
+  test.est_uncertainty =  test.meas_uncertainty;
+  test.q = 0.008;
 
   // Setup the BLE LED to be enabled on CONNECT
   // Note: This is actually the default behaviour, but provided
@@ -78,8 +107,14 @@ void loop()
     // get the RSSI value of this connection
     // monitorRssi() must be called previously (in connect callback)
     int8_t rssi = connection->getRssi();
+
+    test.meas = rssi;
+    filter(&test);
     
-    Serial.printf("%d", rssi);
+    
+    
+    //Serial.printf("%d %f", rssi, test.out);
+    Serial.printf("%d %.0f", rssi, test.out); // rounded
     Serial.println();
 
     // print onece every 30 ms (approx the speed packets are advertised in slow mode)
@@ -89,7 +124,6 @@ void loop()
 
 void connect_callback(uint16_t conn_handle)
 {
-  Serial.println("Connected");
 
   // Get the reference to current connection
   BLEConnection* conn = Bluefruit.Connection(conn_handle);
@@ -110,6 +144,13 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
   (void) conn_handle;
   (void) reason;
 
-  Serial.println();
-  Serial.print("Disconnected, reason = 0x"); Serial.println(reason, HEX);
+}
+
+void filter(kal *k) // pass by reference to save memory
+{
+  k->kal_gain = k->est_uncertainty/(k->est_uncertainty + k->meas_uncertainty); // compute kalman gain
+  k->cur_est = k->prev_est + k->kal_gain*(k->meas - k->prev_est); // compute estimate for current time step
+  k->est_uncertainty = (1 - k->kal_gain)*k->est_uncertainty + abs(k->prev_est - k->cur_est)*k->q; // update estimate uncertainty
+  k->prev_est = k->cur_est; // update previous estimate for next loop iteration
+  k->out = k->cur_est;
 }

@@ -9,6 +9,10 @@ while 1:
         decode = line.decode('utf-8') # decoding into string
         x = decode.split() #splitting using space as delimitor
         print(x)
-        c = conn.cursor()
-        c.execute("INSERT INTO test_table VALUES (?,?)",x) ## can be changed to specify the fields
-        conn.commit()
+        if(x(0)=="B"):
+            c = conn.cursor()
+            c.execute("INSERT INTO batt_table VALUES (?,?)",x(1),x(2)) ## battery table
+        else:
+            c = conn.cursor()
+            c.execute("INSERT INTO test_table VALUES (?,?)",x) ## can be changed to specify the fields
+            conn.commit()

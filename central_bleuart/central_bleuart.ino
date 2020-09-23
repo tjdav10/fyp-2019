@@ -1,11 +1,13 @@
 /*
  * TODO
  * Make it so that it doesn't immediately reconnect to wearable - subject to testing
- * 
+ * Maybe send the name of the dispenser so that 
  */
 
 #include <bluefruit.h>
- 
+
+char name[8+1] = "R001D001";
+
 BLEClientUart clientUart; // bleuart client
 
 const uint8_t CUSTOM_UUID[] =
@@ -26,7 +28,7 @@ void setup()
   // SRAM usage required by SoftDevice will increase dramatically with number of connections
   Bluefruit.begin(0, 1);
   
-  Bluefruit.setName("R001D001");
+  Bluefruit.setName(name);
  
  
   // Init BLE Central Uart Serivce

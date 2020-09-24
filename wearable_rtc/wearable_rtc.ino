@@ -16,7 +16,10 @@
  *        solution: add a last_seen variable and if difference of some time, create a new record
  *          this will have flow on effects to the insertRecord function and scan_callback function
  *          there may be multiple entries with the same name on the list!
+ *      
+ *      the first duration in each record is a really big number for some reason - but normal after that (2779096485)
  *  
+ *  create a string member of node_record_t to represent time of first contact as HH:MM:SS
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
@@ -43,8 +46,8 @@
 #include <math.h>
 #include "RTClib.h"
 
-#define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
-#define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
+#define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
+#define TIMEOUT     (60) // Number of milliseconds before a record is invalidated in the list
 #define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
 
 RTC_PCF8523 rtc;
@@ -74,7 +77,6 @@ typedef struct node_record_s
   uint32_t duration; //duration of contact (non RTC)
   char name[4];       // Name of detected device
   //int8_t   reserved;   // Padding for word alignment
-  uint32_t count;
 } node_record_t;
 
 // Kalman struct for tracking parameters - make an array equal to ARRAY_SIZE and populate it with kalman structs - reset the array when list is reset as well
@@ -91,10 +93,9 @@ typedef struct kalman {
   int8_t raw;
 } kal;
 
+uint32_t last_sent = 0; // used to store the last unix time the list was sent to dispenser
 
 node_record_t records[ARRAY_SIZE];
-
-node_record_t test_list[ARRAY_SIZE];
 
 // Creating array of kalman filter objects
 kal kalmans[ARRAY_SIZE];
@@ -135,15 +136,6 @@ void setup()
     // Set all RSSI values to lowest value for comparison purposes,
     // since 0 would be higher than any valid RSSI value
     records[i].rssi = -128;
-  }
-
-  /* Clear the test_list list */
-  memset(test_list, 0, sizeof(test_list));
-  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
-  {
-    // Set all RSSI values to lowest value (-128) for comparison purposes,
-    // since 0 would be higher than any valid RSSI value
-    test_list[i].rssi = 60; // changed to 60 for debugging
   }
 
   // Setting up parameters for kalman filter
@@ -202,18 +194,7 @@ void setup()
 
   // Set up and start advertising
   startAdv();
-  Serial.println("Advertising ...");
-
-  // Setting up test list for transmission (testing)
-  memcpy(test_list[0].name, "D001", 4); // 
-  test_list[0].count = 5000;
-  memcpy(test_list[1].name, "D002", 4); // 
-  test_list[1].count = 5000;
-  memcpy(test_list[2].name, "D003", 4); // 
-  test_list[2].count = 5000;
-  memcpy(test_list[3].name, "D004", 4); // 
-  test_list[3].count = 5000;
-  
+  Serial.println("Advertising ..."); 
 }
 
 void startAdv(void)
@@ -265,30 +246,50 @@ void connect_callback(uint16_t conn_handle)
   Serial.println(peer_name);
   
   char str[32]; // for converting int8_t to char array for sending over BLE
-  delay(1000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
-  // Sending list over BLE (works)
-  for (int i=0; i<ARRAY_SIZE; i++)
+  DateTime now = rtc.now();
+  
+  if((((now.unixtime() - last_sent) > 300)) || last_sent==0)
   {
-    if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+    delay(3000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
+    // Sending list over BLE (works) (maximum of 20 chars including spaces)
+    for (int i=0; i<ARRAY_SIZE; i++)
     {
-      //This combines all fields from the record into a single string for transmission
-      sprintf(str, "%s %.4s", id, records[i].name); // maximum of 20 chars
-      wearable.write(str); // write str
+      if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+      {
+        //This combines all fields from the record into a single string for transmission
+        sprintf(str, "%s %.4s %u HH:MM", id, records[i].name, records[i].duration); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        wearable.write(str); // write str
+      }
+    }
+    
+    memset(str, 0, sizeof(str)); // clear the str buffer
+    
+    // Sending battery information
+    adcvalue = analogRead(adcin);
+    sprintf(str, "B %.4s %.2f %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
+    wearable.write(str);
+  
+    DateTime now = rtc.now();
+    last_sent = now.unixtime();
+  
+    memset(str, 0, sizeof(str)); // clear the str buffer
+  
+    // Once the list is sent, clear all lists (records and kalman)
+    memset(records, 0, sizeof(records));
+    memset(kalmans, 0, sizeof(kalmans));
+  
+    for (int i=0; i<ARRAY_SIZE; i++)
+    {
+      records[i].rssi = -128;
+      records[i].filtered_rssi = -128;
     }
   }
-  
-  memset(str, 0, sizeof(str)); // clear the str buffer
-  
-  // Sending battery information
-  adcvalue = analogRead(adcin);
-  sprintf(str, "B %.4s %.2f %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
-  wearable.write(str);
-
-  memset(str, 0, sizeof(str)); // clear the str buffer
-
-  // Once the list is sent, clear all lists (records and kalman)
-  memset(records, 0, sizeof(records));
-  memset(kalmans, 0, sizeof(kalmans));
+  else
+  {
+    char dont_connect[2] = "x";
+    wearable.write(dont_connect);
+    Bluefruit.disconnect(conn_handle);
+  }
 
   
   //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
@@ -344,7 +345,7 @@ void printRecordList(void)
   {
     Serial.printf("[%i] ", i);
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u)\n", records[i].filtered_rssi, records[i].duration);
+    Serial.printf("%i (%u)\n", records[i].rssi, records[i].duration);
   }
 }
 
@@ -368,22 +369,25 @@ int insertRecord(node_record_t *record)
     }
     if (match)
     {
-      // Update raw RSSI then filter
-      updateRaw(&kalmans[i], record->rssi);
-      filter(&kalmans[i]);
-      record->filtered_rssi = kalmans[i].filtered;
-
-      // if there is a previous record for this ID AND the previous record doesn't have data in the 'last' field
-      if ((records[i].first < record->first) && (records[i].first!=0))
+      if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
       {
-       record->first = records[i].first;
-      }
-      record->last = now.unixtime();
-      updateDuration(record);
+        // Update raw RSSI then filter
+        updateRaw(&kalmans[i], record->rssi);
+        filter(&kalmans[i]);
+        record->filtered_rssi = kalmans[i].filtered;
+  
+        // if there is a previous record for this ID AND the previous record doesn't have data in the 'last' field
+        if ((records[i].first < record->first) && (records[i].first!=0))
+        {
+         record->first = records[i].first;
+        }
+        record->last = now.unixtime();
+        updateDuration(record);
+              
+        memcpy(&records[i], record, sizeof(node_record_t));
             
-      memcpy(&records[i], record, sizeof(node_record_t));
-          
-      goto inserted;
+        goto inserted;
+      }
     }
   }
 
@@ -436,7 +440,14 @@ void updateRaw(kal *k, uint8_t rssi)
 
 void updateDuration(node_record_t *record)
 {
-  record->duration = (record->last) - (record->first);
+  if(record->last > record->first)
+  {
+    record->duration = abs((record->last) - (record->first));
+  }
+//  else
+//  {
+//    record->duration = 0;
+//  }
 }
 
 
@@ -461,6 +472,4 @@ void loop()
     ch = (uint8_t) wearable.read();
     Serial.write(ch);
   }
-  printRecordList();
-
-}
+  }

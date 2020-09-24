@@ -10,16 +10,18 @@
  *  devices that are also running this program but with different names.
  *  
  *  TODO:
- *  Implement counter or RTC to measure duration of proximity - pseudocode written
- *    Duration counting doesn't really work without RTC as the millis() function is delayed - need the RTC to consistently count time
+ *  Duration of proximity works
+ *    BUGS:
+ *      if moved away but then back again without sending list, the original record is used and duration jumps up due to the way it's calculated
+ *        solution: add a last_seen variable and if difference of some time, create a new record
+ *          this will have flow on effects to the insertRecord function and scan_callback function
+ *          there may be multiple entries with the same name on the list!
  *  
- *  Log date of interaction using RTC
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
  *  Implement final Kalman filter - pretty much done just need to test seperately then implement here
  *  
- *  Add battery level checking and transmission from batteryExampleCode.ino - done but need to test
  *  
  *  ARRAY_SIZE
  *  ----------
@@ -39,10 +41,13 @@
 #include <SPI.h>
 #include <stdio.h>
 #include <math.h>
+#include "RTClib.h"
 
 #define ARRAY_SIZE     (4)    // The number of RSSI values to store and compare
 #define TIMEOUT_MS     (2500) // Number of milliseconds before a record is invalidated in the list
+#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
 
+RTC_PCF8523 rtc;
 
 // Custom UUID used to differentiate this device.
 // Use any online UUID generator to generate a valid UUID.
@@ -64,7 +69,8 @@ typedef struct node_record_s
   int8_t rssi; // current RSSI
   int8_t   filtered_rssi;       // min RSSI value
   uint32_t timestamp;  // Timestamp for invalidation purposes
-  uint32_t first; // first timestamp
+  uint32_t first; // first timestamp (unix time)
+  uint32_t last; // last timestamp (unix time) - when moved out of proximity
   uint32_t duration; //duration of contact (non RTC)
   char name[4];       // Name of detected device
   //int8_t   reserved;   // Padding for word alignment
@@ -85,13 +91,6 @@ typedef struct kalman {
   int8_t raw;
 } kal;
 
-// 32 to be replaced when RTC arrives
-struct date_time {
-  char date[32];
-  char first_time_70[32];
-  char time_left_70[32];
-};
-
 
 node_record_t records[ARRAY_SIZE];
 
@@ -99,9 +98,6 @@ node_record_t test_list[ARRAY_SIZE];
 
 // Creating array of kalman filter objects
 kal kalmans[ARRAY_SIZE];
-
-
-
 
 // Battery level variables
 int adcin    = A6;  // A6 == VDIV is for battery voltage monitoring 
@@ -118,10 +114,17 @@ char id[4+1] = "N001";
 void setup()
 {
   Serial.begin(115200);
+  if (! rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    Serial.flush();
+    abort();
+  }
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 
   Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");
+
+  rtc.start();
 
   analogReadResolution(12); // Can be 8, 10, 12 or 14
 
@@ -135,7 +138,7 @@ void setup()
   }
 
   /* Clear the test_list list */
-  memset(records, 0, sizeof(test_list));
+  memset(test_list, 0, sizeof(test_list));
   for (uint8_t i = 0; i<ARRAY_SIZE; i++)
   {
     // Set all RSSI values to lowest value (-128) for comparison purposes,
@@ -261,19 +264,18 @@ void connect_callback(uint16_t conn_handle)
   Serial.print("Connected to ");
   Serial.println(peer_name);
   
-  uint8_t buf[4]; // for copying name
   char str[32]; // for converting int8_t to char array for sending over BLE
   delay(1000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
   // Sending list over BLE (works)
-//  for (int i=0; i<ARRAY_SIZE; i++)
-//  {
-//    if(test_list[1].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
-//    {
-//      //This combines all fields from the record into a single string for transmission
-//      sprintf(str, "%s %.4s", id, test_list[i].name); // maximum of 20 chars
-//      wearable.write(str); // write str
-//    }
-//  }
+  for (int i=0; i<ARRAY_SIZE; i++)
+  {
+    if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+    {
+      //This combines all fields from the record into a single string for transmission
+      sprintf(str, "%s %.4s", id, records[i].name); // maximum of 20 chars
+      wearable.write(str); // write str
+    }
+  }
   
   memset(str, 0, sizeof(str)); // clear the str buffer
   
@@ -283,6 +285,12 @@ void connect_callback(uint16_t conn_handle)
   wearable.write(str);
 
   memset(str, 0, sizeof(str)); // clear the str buffer
+
+  // Once the list is sent, clear all lists (records and kalman)
+  memset(records, 0, sizeof(records));
+  memset(kalmans, 0, sizeof(kalmans));
+
+  
   //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
@@ -306,14 +314,18 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
 {  
   node_record_t record;
   uint8_t buffer[4]; // used for names of 4 chars long
-  
   /* Prepare the record to try to insert it into the existing record list */
   memcpy(record.addr, report->peer_addr.addr, 6); /* Copy the 6-byte device ADDR */
   record.rssi = report->rssi;                     /* Copy the RSSI value */
   Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
   memcpy(record.name, buffer, 4); // copy contents of buffer to name field
   memset(buffer, 0, sizeof(buffer)); // reset buffer
-  record.timestamp = millis();                    /* Set the timestamp (approximate) */
+  // SET RTC STUFF HERE
+  // Time
+  DateTime now = rtc.now();
+  record.first = now.unixtime(); // use unix time to calculate duration of contact - this is overwritten in the insertRecord() function if a record already exists
+  record.last = now.unixtime();
+  
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
   {
@@ -331,70 +343,20 @@ void printRecordList(void)
   for (uint8_t i = 0; i<ARRAY_SIZE; i++)
   {
     Serial.printf("[%i] ", i);
-    //Serial.printBuffer(records[i].addr, 6, ':');
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u ms)\n", records[i].filtered_rssi, records[i].duration);
+    Serial.printf("%i (%u)\n", records[i].filtered_rssi, records[i].duration);
   }
 }
 
-
-/*  This function will check if any records in the list
- *  have expired and need to be invalidated, such as when
- *  a device goes out of range.
- *  
- *  Returns the number of invalidated records, or 0 if
- *  nothing was changed.
- */
-int invalidateRecords(void) // this doesn't do anything anymore but keeping it in so rest of program works
-{
-/*
-  uint8_t i;
-  uint8_t buffer[4+1]; // used for names of 4 chars long
-  int match = 0;
-
-
-  if (millis() <= TIMEOUT_MS)
-  {
-    return 0;
-  }
-
-
-  for (i=0; i<ARRAY_SIZE; i++)
-  {
-    if (records[i].timestamp) // Ignore zero"ed records
-    {
-      if (millis() - records[i].timestamp >= TIMEOUT_MS)
-      {
-
-        memset(&records[i], 0, sizeof(node_record_t));
-        records[i].rssi = -128;
-        match++;
-      }
-    }
-  }
-
-
-
-  if (match)
-  {
-    // Serial.printf("Invalidated %i records!\n", match);    
-  }
-
-*/
-  //return match;
-  return 0;
-}
 
 /* This function attempts to insert the record if there is room */
 /* Returns 1 if a change was made, otherwise 0 */
 int insertRecord(node_record_t *record)
 {
+  // need some logic in here for the rssi threshold/cutoff for adding records to the list
+  DateTime now = rtc.now();
   uint8_t i;
   
-  /* Invalidate results older than n milliseconds */
-  //invalidateRecords();
-  
-
   /*    Check for a match on existing device address */
   /*    Replace it if a match is found */
   uint8_t match = 0;
@@ -411,23 +373,17 @@ int insertRecord(node_record_t *record)
       filter(&kalmans[i]);
       record->filtered_rssi = kalmans[i].filtered;
 
-      void updateDuration();
-
-      // If previous -70 timestamp is earlier than current one, keep the old (OR MIGHT JUST KEEP THE ORIGINAL NO MATTER WHAT?)
-      // Or if formatted as string can do strcmp just to check difference. Will depend on output from RTC
-      /*pseudo code
-       * if (records[i].timestamp < record->timestamp)
-       *  {
-       *    record->timestamp = records[i].timestamp  //(or do memcpy)
-       *  }
-       * 
-       * 
-       */
+      // if there is a previous record for this ID AND the previous record doesn't have data in the 'last' field
+      if ((records[i].first < record->first) && (records[i].first!=0))
+      {
+       record->first = records[i].first;
+      }
+      record->last = now.unixtime();
+      updateDuration(record);
             
       memcpy(&records[i], record, sizeof(node_record_t));
-    
-      
-      goto sort_then_exit;
+          
+      goto inserted;
     }
   }
 
@@ -444,7 +400,7 @@ int insertRecord(node_record_t *record)
       
       memcpy(&records[i], record, sizeof(node_record_t));
       
-      goto sort_then_exit;
+      goto inserted;
     }
   }
 
@@ -452,7 +408,7 @@ int insertRecord(node_record_t *record)
   // Nothing to do ... list must be full and this interaction is missed :(
   return 0;
 
-sort_then_exit:
+inserted:
   return 1; // returning 1 means list has been updated
 }
 
@@ -480,9 +436,9 @@ void updateRaw(kal *k, uint8_t rssi)
 
 void updateDuration(node_record_t *record)
 {
-  uint32_t now = millis();
-  record->duration = abs(now - record->timestamp);
+  record->duration = (record->last) - (record->first);
 }
+
 
 void loop() 
 {
@@ -505,17 +461,6 @@ void loop()
     ch = (uint8_t) wearable.read();
     Serial.write(ch);
   }
+  printRecordList();
 
-   /* Invalidate old results once per second in addition
-   * to the invalidation in the callback handler. */
-  /* ToDo: Update to use a mutex or semaphore since this
-   * can lead to list corruption as-is if the scann results
-   * callback is fired in the middle of the invalidation
-   * function. */
-  //if (invalidateRecords())
-  {
-    /* The list was updated, print the new values */
-    //printRecordList();
-    //Serial.println("");
-  }
 }

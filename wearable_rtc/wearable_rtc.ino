@@ -1,9 +1,27 @@
 
-/*  This example scans for advertising devices (peripherals) in range,
+/*  CONTACT TRACING BLE PROGRAM FOR USE IN HAND HYGIENE PROJECT
+ *  -----------------------------------------------------------
+ *   v1:
+ *   This program scans for advertising devices (peripherals) in range,
  *  looking for a specific UUID in the advertising packet. When this
- *  UUID is found, it will display an alert, sorting devices detected
- *  in range by their RSSI value, which is an approximate indicator of
- *  proximity (though highly dependent on environmental obstacles, etc.).
+ *  UUID is found, it will add a record to the list. Kalman filtering
+ *  is performed on the RSSI to improve the accuracy of the measurement.
+ *  A record consists of the name, time of first interaction, duration
+ *  of interaction, raw rssi and filtered rssi. Name, duration of
+ *  interaction, time of interaction are sent over BLE to a connecting
+ *  dispenser. Once the list of records has been sent, it will not send again
+ *  until 5 minutes has passed to allow time for interactions to be logged.
+ *  
+ *  The battery level is also sent when the dispenser connects to the wearable.
+ *  
+ *  Format of interaction record:
+ * ------------------------------
+ *  <name of this device> <name of other device> <number of seconds duration> <time of first contact>
+ *  
+ *  Format of battery level data:
+ * ------------------------------
+ * B <name of this device> <battery measured voltage> <max. battery voltage> <min battery voltage>
+ *  
  *  
  *  
  *  This example is intended to be used with multiple peripheral
@@ -12,18 +30,13 @@
  *  TODO:
  *  Duration of proximity works
  *    BUGS:
- *      if moved away but then back again without sending list, the original record is used and duration jumps up due to the way it's calculated
- *        solution: add a last_seen variable and if difference of some time, create a new record
- *          this will have flow on effects to the insertRecord function and scan_callback function
- *          there may be multiple entries with the same name on the list!
- *      
- *      the first duration in each record is a really big number for some reason - but normal after that (2779096485)
- *  
- *  create a string member of node_record_t to represent time of first contact as HH:MM:SS
+ *      the first duration in each record is a really big number for some reason - but normal after that (2779096485 is the number)
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
  *  Implement final Kalman filter - pretty much done just need to test seperately then implement here
+ *  
+ *  Write better quality code and refine comments
  *  
  *  
  *  ARRAY_SIZE
@@ -31,11 +44,15 @@
  *  The numbers of peripherals tracked can be set via the
  *  ARRAY_SIZE macro. Must be at least 2.
  *  
- *  TIMEOUT_MS - not needed as they will never be removed
+ *  TIMEOUT
  *  ----------
- *  This value determines the number of milliseconds before a tracked
- *  peripheral has it's last sample 'invalidated', such as when a device
- *  is tracked and then goes out of range.
+ *  This value determines the number of seconds before a tracked
+ *  peripheral has the interaction recognised as ended. If the peripheral enters
+ *  proximity again, a new record will be created
+ *  
+ *  RSSI_THRESHOLD
+ *  ----------
+ *  The RSSI threshold that needs to be crossed for a record to be created.
  */
 
 #include <string.h>
@@ -46,9 +63,11 @@
 #include <math.h>
 #include "RTClib.h"
 
+#define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
-#define TIMEOUT     (60) // Number of milliseconds before a record is invalidated in the list
+#define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
 #define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
+
 
 RTC_PCF8523 rtc;
 
@@ -71,11 +90,13 @@ typedef struct node_record_s
   uint8_t  addr[6];    // Six byte device address
   int8_t rssi; // current RSSI
   int8_t   filtered_rssi;       // min RSSI value
-  uint32_t timestamp;  // Timestamp for invalidation purposes
   uint32_t first; // first timestamp (unix time)
   uint32_t last; // last timestamp (unix time) - when moved out of proximity
-  uint32_t duration; //duration of contact (non RTC)
+  uint32_t duration; //duration of contact in seconds
   char name[4];       // Name of detected device
+  uint8_t hour;
+  uint8_t minute;
+  char time[5];
   //int8_t   reserved;   // Padding for word alignment
 } node_record_t;
 
@@ -110,7 +131,7 @@ float v_min = 3.00; // min battery voltage
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
-char id[4+1] = "N001";
+//char id[4+1] = "N001";
 
 void setup()
 {
@@ -164,7 +185,7 @@ void setup()
   Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values (+4)
 
   /* Set the device name */
-  Bluefruit.setName(id);
+  Bluefruit.setName(ID);
 
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
@@ -257,7 +278,7 @@ void connect_callback(uint16_t conn_handle)
       if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
       {
         //This combines all fields from the record into a single string for transmission
-        sprintf(str, "%s %.4s %u HH:MM", id, records[i].name, records[i].duration); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        sprintf(str, "%s %.4s %u %u:%u", ID, records[i].name, records[i].duration, records[i].hour, records[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
         wearable.write(str); // write str
       }
     }
@@ -266,10 +287,10 @@ void connect_callback(uint16_t conn_handle)
     
     // Sending battery information
     adcvalue = analogRead(adcin);
-    sprintf(str, "B %.4s %.2f %.2f %.2f", id, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
+    sprintf(str, "B %.4s %.2f %.2f %.2f", ID, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
     wearable.write(str);
   
-    DateTime now = rtc.now();
+    DateTime now = rtc.now(); // control to make it so the list isn't sent unless it has been more than 5 minutes
     last_sent = now.unixtime();
   
     memset(str, 0, sizeof(str)); // clear the str buffer
@@ -283,11 +304,12 @@ void connect_callback(uint16_t conn_handle)
       records[i].rssi = -128;
       records[i].filtered_rssi = -128;
     }
+    Bluefruit.disconnect(conn_handle);
   }
   else
   {
-    char dont_connect[2] = "x";
-    wearable.write(dont_connect);
+//    char dont_connect[2] = "x"; // sends a don't connect flag
+//    wearable.write(dont_connect);
     Bluefruit.disconnect(conn_handle);
   }
 
@@ -326,6 +348,8 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   DateTime now = rtc.now();
   record.first = now.unixtime(); // use unix time to calculate duration of contact - this is overwritten in the insertRecord() function if a record already exists
   record.last = now.unixtime();
+  record.hour = now.hour();
+  record.minute = now.minute();
   
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
@@ -380,6 +404,8 @@ int insertRecord(node_record_t *record)
         if ((records[i].first < record->first) && (records[i].first!=0))
         {
          record->first = records[i].first;
+         record->hour = records[i].hour;
+         record->minute = records[i].minute;
         }
         record->last = now.unixtime();
         updateDuration(record);

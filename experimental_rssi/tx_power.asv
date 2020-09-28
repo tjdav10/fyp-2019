@@ -1,0 +1,102 @@
+clear all; close all; clc;
+
+% reading from file tx power = 8
+fileID = fopen('better_8.log');
+data = fscanf(fileID,'%d %d', [2 Inf]);
+data = data';
+offset = data(1,1);
+data(:,1) = data(:,1) - offset;
+data(:,1) = data(:,1)/1000;
+figure(1);
+plot(data(:,1),data(:,2));
+fclose(fileID);
+hold on;
+title
+
+fileID = fopen('better_4.log');
+data1 = fscanf(fileID,'%d %d', [2 Inf]);
+data1= data1';
+offset = data1(1,1);
+data1(:,1) = data1(:,1) - offset;
+data1(:,1) = data1(:,1)/1000;
+figure(2);
+plot(data1(:,1),data1(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_2.log');
+data2 = fscanf(fileID,'%d %d', [2 Inf]);
+data2= data2';
+offset = data2(1,1);
+data2(:,1) = data2(:,1) - offset;
+data2(:,1) = data2(:,1)/1000;
+figure(3);
+plot(data2(:,1),data2(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_0.log');
+data3 = fscanf(fileID,'%d %d', [2 Inf]);
+data3= data3';
+offset = data3(1,1);
+data3(:,1) = data3(:,1) - offset;
+data3(:,1) = data3(:,1)/1000;
+figure(4);
+plot(data3(:,1),data3(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_-4.log');
+data4 = fscanf(fileID,'%d %d', [2 Inf]);
+data4= data4';
+offset = data4(1,1);
+data4(:,1) = data4(:,1) - offset;
+data4(:,1) = data4(:,1)/1000;
+figure(5);
+plot(data4(:,1),data4(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_-8.log');
+data5 = fscanf(fileID,'%d %d', [2 Inf]);
+data5= data5';
+offset = data5(1,1);
+data5(:,1) = data5(:,1) - offset;
+data5(:,1) = data5(:,1)/1000;
+figure(6);
+plot(data5(:,1),data5(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_-12.log');
+data6 = fscanf(fileID,'%d %d', [2 Inf]);
+data6= data6';
+offset = data6(1,1);
+data6(:,1) = data6(:,1) - offset;
+data6(:,1) = data6(:,1)/1000;
+figure(7);
+plot(data6(:,1),data6(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_-16.log');
+data7 = fscanf(fileID,'%d %d', [2 Inf]);
+data7= data7';
+offset = data7(1,1);
+data7(:,1) = data7(:,1) - offset;
+data7(:,1) = data7(:,1)/1000;
+figure(8);
+plot(data7(:,1),data7(:,2));
+fclose(fileID);
+hold on;
+
+fileID = fopen('better_-20.log');
+data8 = fscanf(fileID,'%d %d', [2 Inf]);
+data8= data8';
+offset = data8(1,1);
+data8(:,1) = data8(:,1) - offset;
+data8(:,1) = data8(:,1)/1000;
+figure(9);
+plot(data8(:,1),data8(:,2));
+fclose(fileID);
+hold on;

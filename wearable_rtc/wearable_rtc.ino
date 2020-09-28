@@ -38,6 +38,9 @@
  *  
  *  Write better quality code and refine comments
  *  
+ *  Add thresholding code for adding records
+ *    - done but not tested
+ *  
  *  
  *  ARRAY_SIZE
  *  ----------
@@ -66,7 +69,8 @@
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
+#define RSSI_THRESHOLD (-85)  // RSSI threshold to log interaction
+#define CONVERGENCE_TIME (10) // kalman filter convergence time
 
 
 RTC_PCF8523 rtc;
@@ -126,7 +130,7 @@ int adcin    = A6;  // A6 == VDIV is for battery voltage monitoring
 int adcvalue = 0;
 float mv_per_lsb = 3600.0F/4096.0F; // 12-bit ADC with 3.6V input range
                                     //the default analog reference voltage is 3.6 V
-float v_max = 4.00; // the maximum battery voltage
+float v_max = 4.06; // the maximum battery voltage
 float v_min = 3.00; // min battery voltage
 
 // Add BLE services
@@ -135,13 +139,13 @@ BLEUart wearable;       // uart over ble, as the peripheral
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(115200); // remove this for final
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
     Serial.flush();
     abort();
   }
-  while ( !Serial ) delay(10);   // for nrf52840 with native usb
+  while ( !Serial ) delay(10);   // for nrf52840 with native usb -  remove for final
 
   Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");
@@ -182,7 +186,7 @@ void setup()
     Serial.println("Bluefruit initialized (central mode)");
   }
   
-  Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values (+4)
+  Bluefruit.setTxPower(-8);    // Check bluefruit.h for supported values - RSSI above -85 for 1.5m
 
   /* Set the device name */
   Bluefruit.setName(ID);
@@ -376,9 +380,8 @@ void printRecordList(void)
 
 /* This function attempts to insert the record if there is room */
 /* Returns 1 if a change was made, otherwise 0 */
-int insertRecord(node_record_t *record)
+int insertRecord(node_record_t *record) // need to add some code for checking the rssi threshold in this function
 {
-  // need some logic in here for the rssi threshold/cutoff for adding records to the list
   DateTime now = rtc.now();
   uint8_t i;
   
@@ -409,10 +412,12 @@ int insertRecord(node_record_t *record)
         }
         record->last = now.unixtime();
         updateDuration(record);
-              
-        memcpy(&records[i], record, sizeof(node_record_t));
-            
-        goto inserted;
+
+        if(record->filtered_rssi >= RSSI_THRESHOLD)
+        {
+          memcpy(&records[i], record, sizeof(node_record_t));
+          goto inserted;
+        }
       }
     }
   }
@@ -427,15 +432,16 @@ int insertRecord(node_record_t *record)
       updateRaw(&kalmans[i], record->rssi);
       filter(&kalmans[i]);
       record->filtered_rssi = kalmans[i].filtered;
-      
-      memcpy(&records[i], record, sizeof(node_record_t));
-      
-      goto inserted;
+      if(record->filtered_rssi >= RSSI_THRESHOLD)
+      {
+        memcpy(&records[i], record, sizeof(node_record_t));
+        goto inserted;
+      }
     }
   }
 
 
-  // Nothing to do ... list must be full and this interaction is missed :(
+  // Nothing to do ... list is either full or RSSI not high enough
   return 0;
 
 inserted:

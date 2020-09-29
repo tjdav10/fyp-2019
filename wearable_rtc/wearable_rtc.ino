@@ -23,7 +23,6 @@
  * B <name of this device> <battery measured voltage> <max. battery voltage> <min battery voltage>
  *  
  *  
- *  
  *  This example is intended to be used with multiple peripheral
  *  devices that are also running this program but with different names.
  *  
@@ -282,7 +281,7 @@ void connect_callback(uint16_t conn_handle)
       if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
       {
         //This combines all fields from the record into a single string for transmission
-        sprintf(str, "%s %.4s %u %u:%u", ID, records[i].name, records[i].duration, records[i].hour, records[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        sprintf(str, "%s %.4s %u %u:%02u", ID, records[i].name, records[i].duration, records[i].hour, records[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
         wearable.write(str); // write str
       }
     }
@@ -458,11 +457,11 @@ void filter(kal *k) // pass by reference to save memory
   k->filtered = k->cur_est;
 }
 
-void setUpKalman(kal *k) // parameters need to be updated
+void setUpKalman(kal *k) // parameters are updated pre-meeting with Mehmet on 30/09/20
 {
-  k->meas_uncertainty = 1;
-  k->est_uncertainty = 1;
-  k->q = 1;
+  k->meas_uncertainty = 2.2398; // the variance of static signal
+  k->est_uncertainty = k->meas_uncertainty;
+  k->q = 0.05;
 }
 
 void updateRaw(kal *k, uint8_t rssi)

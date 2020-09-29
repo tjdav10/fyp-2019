@@ -1,6 +1,6 @@
+% Advertising interval is 20ms, scan all the time
 clear all; close all; clc;
 
-% reading from file tx power = 8
 fileID = fopen('better_8.log');
 data = fscanf(fileID,'%d %d', [2 Inf]);
 data = data';
@@ -11,7 +11,9 @@ figure(1);
 plot(data(:,1),data(:,2));
 fclose(fileID);
 hold on;
-title
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=8dBm');
 
 fileID = fopen('better_4.log');
 data1 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -23,6 +25,9 @@ figure(2);
 plot(data1(:,1),data1(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=4dBm');
 
 fileID = fopen('better_2.log');
 data2 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -34,6 +39,9 @@ figure(3);
 plot(data2(:,1),data2(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=2dBm');
 
 fileID = fopen('better_0.log');
 data3 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -45,6 +53,9 @@ figure(4);
 plot(data3(:,1),data3(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=0dBm');
 
 fileID = fopen('better_-4.log');
 data4 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -56,6 +67,9 @@ figure(5);
 plot(data4(:,1),data4(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-4dBm');
 
 fileID = fopen('better_-8.log');
 data5 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -67,6 +81,9 @@ figure(6);
 plot(data5(:,1),data5(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-8dBm');
 
 fileID = fopen('better_-12.log');
 data6 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -78,6 +95,9 @@ figure(7);
 plot(data6(:,1),data6(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-12dBm');
 
 fileID = fopen('better_-16.log');
 data7 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -89,6 +109,9 @@ figure(8);
 plot(data7(:,1),data7(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-16dBm');
 
 fileID = fopen('better_-20.log');
 data8 = fscanf(fileID,'%d %d', [2 Inf]);
@@ -100,3 +123,20 @@ figure(9);
 plot(data8(:,1),data8(:,2));
 fclose(fileID);
 hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-20dBm');
+
+fileID = fopen('scan_again.log');
+data = fscanf(fileID,'%d %d', [2 Inf]);
+data = data';
+offset = data(1,1);
+data(:,1) = data(:,1) - offset;
+data(:,1) = data(:,1)/1000;
+figure(10);
+plot(data(:,1),data(:,2));
+fclose(fileID);
+hold on;
+xlabel('Time (s)');
+ylabel('RSSI');
+title('TxPower=-8dBm, ScanTxPower=-8dBm');

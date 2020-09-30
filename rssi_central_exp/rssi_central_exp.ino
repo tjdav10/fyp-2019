@@ -37,7 +37,7 @@ void setup()
   Bluefruit.setConnLedInterval(250);
   Bluefruit.Scanner.setRxCallback(scan_callback);
   Bluefruit.Scanner.filterUuid(uuid);
-  Bluefruit.Scanner.setInterval(160, 80);       // in units of 0.625 ms - (interval = 100ms, window = 50ms)
+  Bluefruit.Scanner.setInterval(160, 160);       // in units of 0.625 ms - (interval = 100ms, window = 50ms)
   Bluefruit.Scanner.start(0);
 
   //Serial.println("Scanning ...");

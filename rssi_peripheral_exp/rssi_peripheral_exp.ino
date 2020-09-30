@@ -54,7 +54,7 @@ void setup()
     Serial.println("Bluefruit initialized (peripheral mode)");
   }
 
-  Bluefruit.setTxPower(-40);    // Check bluefruit.h for supported values
+  Bluefruit.setTxPower(-8);    // Check bluefruit.h for supported values
   Bluefruit.setName("D005");
 
   // Set up and start advertising
@@ -89,7 +89,7 @@ void startAdv(void)
    */
   Bluefruit.Advertising.restartOnDisconnect(true);
 //  Bluefruit.Advertising.setInterval(800, 3200);    // in units of 0.625 ms
-  Bluefruit.Advertising.setInterval(32, 32);    // in units of 0.625 ms
+  Bluefruit.Advertising.setInterval(800, 800);    // in units of 0.625 ms
   Bluefruit.Advertising.setFastTimeout(0);      // number of seconds in fast mode
   Bluefruit.Advertising.start();
 }

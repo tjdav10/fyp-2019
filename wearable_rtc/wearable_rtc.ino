@@ -38,8 +38,10 @@
  *  Write better quality code and refine comments
  *  
  *  Add thresholding code for adding records
- *    - WIP
- *    - Problem is that it keeps creating new records if RSSI is below threshold. Need to somehow discard first ~10s of RSSI data
+ *    - Done?
+ *    - There are two lists, final_list is the one that should be transmitted.
+ *    - Index matches in list named record and list named final_list
+ *    - This means there will be some gaps in final_list - can fix this later
  *  
  *  
  *  ARRAY_SIZE
@@ -69,8 +71,8 @@
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
-#define CONVERGENCE_TIME (15) // kalman filter convergence time
+#define RSSI_THRESHOLD (-100)  // RSSI threshold to log interaction
+#define CONVERGENCE_TIME (5) // kalman filter convergence time
 
 
 RTC_PCF8523 rtc;
@@ -122,7 +124,7 @@ uint32_t last_sent = 0; // used to store the last unix time the list was sent to
 
 node_record_t records[ARRAY_SIZE];
 
-node_record_t prelim[ARRAY_SIZE]; // preliminary storage of records to discard first 15s of filtered RSSI
+node_record_t final_list[ARRAY_SIZE]; // preliminary storage of records to discard first 15s of filtered RSSI
 
 // Creating array of kalman filter objects
 kal kalmans[ARRAY_SIZE];
@@ -247,8 +249,8 @@ void startAdv(void)
 
   /* Start Advertising
    * - Enable auto advertising if disconnected
-   * - Interval:  fast mode = 20 ms, slow mode = 152.5 ms
-   * - Timeout for fast mode is 30 seconds
+   * - Interval:  fast mode = 500 ms, slow mode = 500 ms (same)
+   * - Timeout for fast mode is 0 seconds
    * - Start(timeout) with timeout = 0 will advertise forever (until connected)
    * 
    * For recommended advertising interval
@@ -256,7 +258,7 @@ void startAdv(void)
    */
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.setInterval(800, 800);    // in units of 0.625 ms (152.5ms = 244*0.625) (probably a bit too fast)
-  Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
+  Bluefruit.Advertising.setFastTimeout(0);      // number of seconds in fast mode
   Bluefruit.Advertising.start();
 }
 
@@ -353,14 +355,17 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   // Time
   DateTime now = rtc.now();
   record.first = now.unixtime(); // use unix time to calculate duration of contact - this is overwritten in the insertRecord() function if a record already exists
-  record.last = now.unixtime();
-  record.hour = now.hour();
-  record.minute = now.minute();
+  record.last = now.unixtime(); // this is kept
+  record.hour = now.hour(); // this is overwritten if record already in list
+  record.minute = now.minute(); // this is overwritten if record already in list
   
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
   {
+    Serial.println("pre");
     printRecordList();                            /* The list was updated, print the new values */
+    Serial.println("final");
+    printFinalList();
   }
 
   // For Softdevice v6: after received a report, scanner will be paused
@@ -376,6 +381,17 @@ void printRecordList(void)
     Serial.printf("[%i] ", i);
     Serial.printf("%.4s ",records[i].name);
     Serial.printf("%i (%u)\n", records[i].filtered_rssi, records[i].duration);
+  }
+}
+
+/* Prints the current record list to the Serial Monitor */
+void printFinalList(void)
+{
+  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
+  {
+    Serial.printf("[%i] ", i);
+    Serial.printf("%.4s ", final_list[i].name);
+    Serial.printf("%i (%u)\n", final_list[i].filtered_rssi, final_list[i].duration);
   }
 }
 
@@ -400,8 +416,7 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
     }
     if (match)
     {
-      //if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
-      if(1)
+      if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
       {
         // Update raw RSSI then filter
         updateRaw(&kalmans[i], record->rssi);
@@ -418,11 +433,8 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
         record->last = now.unixtime();
         updateDuration(record);
 
-        if(record->filtered_rssi >= RSSI_THRESHOLD ||)
-        {
-          memcpy(&records[i], record, sizeof(node_record_t));
-          goto inserted;
-        }
+        memcpy(&records[i], record, sizeof(node_record_t));
+        goto inserted;
       }
     }
   }
@@ -446,10 +458,11 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
   }
 
 
-  // Nothing to do ... list is either full or RSSI not high enough
+  // Nothing to do ... list is full
   return 0;
 
 inserted:
+  copyRecords();
   return 1; // returning 1 means list has been updated
 }
 
@@ -467,7 +480,7 @@ void setUpKalman(kal *k) // parameters are updated pre-meeting with Mehmet on 30
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 0.05;
+  k->q = 0.5;
 }
 
 void updateRaw(kal *k, uint8_t rssi)
@@ -487,6 +500,39 @@ void updateDuration(node_record_t *record)
 //  }
 }
 
+
+int copyRecords() // need to check for matches in ths fn
+{
+  int match;
+  for (uint8_t i=0; i<ARRAY_SIZE; i++)
+  {
+    //for (uint8_t j=0; j<ARRAY_SIZE; j++)
+      {
+        if(memcmp(records[i].addr, final_list[i].addr, 6) == 0)
+        {
+          if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
+          {
+            Serial.println("match id'ed");
+//            Serial.printf("match found");
+            final_list[i] = records[i];
+            //goto done;
+          }
+        }
+        
+        else if(final_list[i].name[0]==0)
+        {
+          if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
+          {
+//            Serial.printf("new record");
+            final_list[i] = records[i];
+            goto done;
+          }
+        }
+      }
+  }
+  done:
+  return 0;
+}
 
 void loop() 
 {

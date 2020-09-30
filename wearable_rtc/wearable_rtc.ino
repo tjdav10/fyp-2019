@@ -38,7 +38,8 @@
  *  Write better quality code and refine comments
  *  
  *  Add thresholding code for adding records
- *    - done but not tested
+ *    - WIP
+ *    - Problem is that it keeps creating new records if RSSI is below threshold. Need to somehow discard first ~10s of RSSI data
  *  
  *  
  *  ARRAY_SIZE
@@ -68,8 +69,8 @@
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-85)  // RSSI threshold to log interaction
-#define CONVERGENCE_TIME (10) // kalman filter convergence time
+#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
+#define CONVERGENCE_TIME (15) // kalman filter convergence time
 
 
 RTC_PCF8523 rtc;
@@ -120,6 +121,8 @@ typedef struct kalman {
 uint32_t last_sent = 0; // used to store the last unix time the list was sent to dispenser
 
 node_record_t records[ARRAY_SIZE];
+
+node_record_t prelim[ARRAY_SIZE]; // preliminary storage of records to discard first 15s of filtered RSSI
 
 // Creating array of kalman filter objects
 kal kalmans[ARRAY_SIZE];
@@ -182,10 +185,10 @@ void setup()
   }
   else
   {
-    Serial.println("Bluefruit initialized (central mode)");
+    Serial.println("Bluefruit initialized");
   }
   
-  Bluefruit.setTxPower(-8);    // Check bluefruit.h for supported values - RSSI above -85 for 1.5m
+  Bluefruit.setTxPower(-8);    // Check bluefruit.h for supported values -
 
   /* Set the device name */
   Bluefruit.setName(ID);
@@ -203,7 +206,7 @@ void setup()
   /* Start Central Scanning
    * - Enable auto scan if disconnected
    * - Filter out packet with a min rssi
-   * - Interval = 100 ms, window = 50 ms
+   * - Interval = 100 ms, window = 100 ms
    * - Use active scan (used to retrieve the optional scan response adv packet)
    * - Start(0) = will scan forever since no timeout is given
    */
@@ -211,7 +214,7 @@ void setup()
   Bluefruit.Scanner.restartOnDisconnect(true);
   //Bluefruit.Scanner.filterRssi(-80);            // Only invoke callback for devices with RSSI >= -80 dBm
   Bluefruit.Scanner.filterUuid(uuid);           // Only invoke callback if the target UUID was found
-  Bluefruit.Scanner.setInterval(160, 80);       // in units of 0.625 ms
+  Bluefruit.Scanner.setInterval(160, 160);       // in units of 0.625 ms
   Bluefruit.Scanner.useActiveScan(true);        // Request scan response data MAYBE CHANGE THIS TO FALSE / OR MAKE IT SO THAT NAME IS TAKEN FROM SCAN RESPONSE
   Bluefruit.Scanner.start(0);                   // 0 = Don't stop scanning after n seconds
   Serial.println("Scanning ...");
@@ -252,7 +255,7 @@ void startAdv(void)
    * https://developer.apple.com/library/content/qa/qa1931/_index.html
    */
   Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(32, 244);    // in units of 0.625 ms (152.5ms = 244*0.625) (probably a bit too fast)
+  Bluefruit.Advertising.setInterval(800, 800);    // in units of 0.625 ms (152.5ms = 244*0.625) (probably a bit too fast)
   Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
   Bluefruit.Advertising.start();
 }
@@ -372,19 +375,21 @@ void printRecordList(void)
   {
     Serial.printf("[%i] ", i);
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u)\n", records[i].rssi, records[i].duration);
+    Serial.printf("%i (%u)\n", records[i].filtered_rssi, records[i].duration);
   }
 }
 
 
 /* This function attempts to insert the record if there is room */
 /* Returns 1 if a change was made, otherwise 0 */
-int insertRecord(node_record_t *record) // need to add some code for checking the rssi threshold in this function
+int insertRecord(node_record_t *record) // need to add some code for checking the rssi threshold in this function (after filtering)
 {
   DateTime now = rtc.now();
   uint8_t i;
   
   /*    Check for a match on existing device address */
+  /*    Filter the RSSI */
+  /*    Check if RSSI>Threshold */
   /*    Replace it if a match is found */
   uint8_t match = 0;
   for (i=0; i<ARRAY_SIZE; i++)
@@ -395,7 +400,8 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
     }
     if (match)
     {
-      if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
+      //if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
+      if(1)
       {
         // Update raw RSSI then filter
         updateRaw(&kalmans[i], record->rssi);
@@ -412,7 +418,7 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
         record->last = now.unixtime();
         updateDuration(record);
 
-        if(record->filtered_rssi >= RSSI_THRESHOLD)
+        if(record->filtered_rssi >= RSSI_THRESHOLD ||)
         {
           memcpy(&records[i], record, sizeof(node_record_t));
           goto inserted;

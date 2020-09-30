@@ -2,8 +2,8 @@ clear all; close all; clc;
 % tx power is -8dBm same as scan power
 % adv_interval is 500ms, scan window is 100% of time
 
-window_size = 5;
-fileID = fopen('kalman\kalman_150cm.log');
+window_size = 10;
+fileID = fopen('kalman\final_150cm.log');
 data = fscanf(fileID,'%d %d', [2 Inf]);
 data = data';
 offset = data(1,1);
@@ -22,7 +22,7 @@ var_rssi=var(data(:,2));
 % Declaring parameters - adjust these to tune Kalman Filter
 meas_uncertainty = var_rssi; % measurement uncertainty (covariance of signal)
 est_uncertainty = meas_uncertainty; % estimate uncertainty (set same as meas_uncertainty initially. is updated in the filter)
-R = [1 0.5 0.25 0.1 0.05 0.025]; % process noise
+R = [5 2 1 0.5 0.25 0.1]; % process noise
 
 fileID = fopen('kalman\moving_longer.log');
 data = fscanf(fileID,'%d %d', [2 Inf]);

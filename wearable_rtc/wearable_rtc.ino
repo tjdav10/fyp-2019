@@ -30,10 +30,12 @@
  *  Duration of proximity works
  *    BUGS:
  *      the first duration in each record is a really big number for some reason - but normal after that (2779096485 is the number)
+ *      seems to be fixed
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
- *  Implement final Kalman filter - pretty much done just need to test seperately then implement here
+ *  Implement final Kalman filter
+ *    Done just need to adjust process noise
  *  
  *  Write better quality code and refine comments
  *  
@@ -41,7 +43,10 @@
  *    - Done?
  *    - There are two lists, final_list is the one that should be transmitted.
  *    - Index matches in list named record and list named final_list
- *    - This means there will be some gaps in final_list - can fix this later
+ *    - This means there will be some gaps in final_list
+ *      This isn't that bad
+ *      Possible optimisation is using linked list so that list size is dynamic
+ *        Out of scope for FYP probably
  *  
  *  
  *  ARRAY_SIZE
@@ -70,8 +75,8 @@
 
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
-#define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-100)  // RSSI threshold to log interaction
+#define TIMEOUT     (20) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
+#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
 #define CONVERGENCE_TIME (5) // kalman filter convergence time
 
 
@@ -279,14 +284,14 @@ void connect_callback(uint16_t conn_handle)
   
   if((((now.unixtime() - last_sent) > 300)) || last_sent==0)
   {
-    delay(3000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
+    delay(8000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
     // Sending list over BLE (works) (maximum of 20 chars including spaces)
     for (int i=0; i<ARRAY_SIZE; i++)
     {
-      if(records[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+      if(final_list[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
       {
         //This combines all fields from the record into a single string for transmission
-        sprintf(str, "%s %.4s %u %u:%02u", ID, records[i].name, records[i].duration, records[i].hour, records[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        sprintf(str, "%s %.4s %u %u:%02u", ID, final_list[i].name, final_list[i].duration, final_list[i].hour, final_list[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
         wearable.write(str); // write str
       }
     }
@@ -305,12 +310,15 @@ void connect_callback(uint16_t conn_handle)
   
     // Once the list is sent, clear all lists (records and kalman)
     memset(records, 0, sizeof(records));
+    memset(final_list, 0, sizeof(final_list));
     memset(kalmans, 0, sizeof(kalmans));
   
     for (int i=0; i<ARRAY_SIZE; i++)
     {
       records[i].rssi = -128;
       records[i].filtered_rssi = -128;
+      final_list[i].rssi = -128;
+      final_list[i].filtered_rssi = -128;
     }
     Bluefruit.disconnect(conn_handle);
   }
@@ -480,7 +488,7 @@ void setUpKalman(kal *k) // parameters are updated pre-meeting with Mehmet on 30
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 0.5;
+  k->q = 1;
 }
 
 void updateRaw(kal *k, uint8_t rssi)
@@ -506,30 +514,63 @@ int copyRecords() // need to check for matches in ths fn
   int match;
   for (uint8_t i=0; i<ARRAY_SIZE; i++)
   {
-    //for (uint8_t j=0; j<ARRAY_SIZE; j++)
+    if(memcmp(records[i].addr, final_list[i].addr, 6) == 0) // checking for match
+    {
+      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
       {
-        if(memcmp(records[i].addr, final_list[i].addr, 6) == 0)
+        final_list[i] = records[i];
+      }
+    }
+    else if(final_list[i].name[0]==0)
+    {
+      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
+      {
+        final_list[i] = records[i];
+      }
+    }
+  }
+
+
+
+
+  /* This block is for optimising the list (where the two lists are different sizes)
+  for (uint8_t i=0; i<ARRAY_SIZE; i++)
+  {
+    for (uint8_t j=0; j<ARRAY_SIZE; j++)
+      {
+        if(memcmp(records[i].addr, final_list[i].addr, 6) == 0) // checking for match
         {
           if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
           {
             Serial.println("match id'ed");
 //            Serial.printf("match found");
-            final_list[i] = records[i];
-            //goto done;
+            if(final_list[j].first == records[i].first)
+            {
+              Serial.println("firsts equal");
+              Serial.printf("j =  %u, i = %u",j, i);
+              if(final_list[j-1].first==records[i].first)
+              {
+                goto done;
+              }
+              final_list[j] = records[i];
+            }
           }
         }
         
-        else if(final_list[i].name[0]==0)
+        else if(final_list[j].name[0]==0)
         {
           if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
           {
 //            Serial.printf("new record");
-            final_list[i] = records[i];
+            final_list[j] = records[i];
             goto done;
           }
+          //goto done;
         }
       }
   }
+
+  */
   done:
   return 0;
 }

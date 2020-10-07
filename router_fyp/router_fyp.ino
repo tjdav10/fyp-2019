@@ -1,16 +1,15 @@
-/* A simple Central BLE Uart program to forward data received from wearables to Serial (to raspberry pi)
- * TODO:
- * Get name of last connected wearable
- *  Make it so it won't auto-reconnect to the last wearable
+/*
+ * Router BLE program for FYP
  * 
- * 
+ * Connects to wearables to forward relevant data to Gateway
  * 
  */
+
 #include <bluefruit.h>
 
-BLEClientUart clientUart; // bleuart client
+char ID[4+1] = "G001";
 
-char last_conn[4+1];
+BLEClientUart clientUart; // bleuart client
 
 const uint8_t CUSTOM_UUID[] =
 {
@@ -20,19 +19,30 @@ const uint8_t CUSTOM_UUID[] =
 
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 
+/*
+// Battery level variables
+int adcin    = A6;  // A6 == VDIV is for battery voltage monitoring 
+int adcvalue = 0;
+float mv_per_lsb = 3600.0F/4096.0F; // 12-bit ADC with 3.6V input range
+                                    //the default analog reference voltage is 3.6 V
+float v_max = 4.06; // the maximum battery voltage
+float v_min = 3.00; // min battery voltage
+*/
+ 
 void setup()
 {
   Serial.begin(115200);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
  
-  Serial.println("Dispenser Central BLEUART");
-  Serial.println("-----------------------------------\n");
   
   // Initialize Bluefruit with maximum connections as Peripheral = 0, Central = 1
   // SRAM usage required by SoftDevice will increase dramatically with number of connections
   Bluefruit.begin(0, 1);
   
-  Bluefruit.setName("R001D001");
+  Bluefruit.setName(ID);
+
+//  analogReadResolution(12); // Can be 8, 10, 12 or 14
+ 
  
   // Init BLE Central Uart Serivce
   clientUart.begin();
@@ -53,7 +63,7 @@ void setup()
    */
   Bluefruit.Scanner.setRxCallback(scan_callback);
   Bluefruit.Scanner.restartOnDisconnect(true);
-  Bluefruit.Scanner.filterUuid(uuid);           // Only invoke callback if the target UUID was found
+  Bluefruit.Scanner.filterUuid(uuid);
   Bluefruit.Scanner.setInterval(160, 80); // in unit of 0.625 ms
   Bluefruit.Scanner.useActiveScan(false);
   Bluefruit.Scanner.start(0);                   // // 0 = Don't stop scanning after n seconds
@@ -65,29 +75,18 @@ void setup()
  */
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {
-  delay(200);
-  // UUID is already filtered so just need to check ID of last wearable connected to
-
-  uint8_t buffer[4]; // used for names of 4 chars long
-  char name[4];
-  char str[4];
-  Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
-  memcpy(name, buffer, 4);
-  sprintf(str, "%s", name);
-  Serial.printf("strcmp returned %i\n", strcmp(str,last_conn));
-  Serial.printf("str = %s\n", str);
-  Serial.printf("last_conn = %s\n", last_conn);
-  Serial.println();
-  //if(strcmp(name, last_conn)!=0) // if name and last_conn are different, connect to the device
+  // Need to have some condition here to see if recently connected to this device (maybe a list of recent names)
+  if(1)
   {
+ 
+    // Connect to device with bleuart service in advertising
     Bluefruit.Central.connect(report);
+  }else
+  {      
+    // For Softdevice v6: after received a report, scanner will be paused
+    // We need to call Scanner resume() to continue scanning
+    Bluefruit.Scanner.resume();
   }
-  /*
-  else
-  {
-    Bluefruit.Scanner.resume(); // if recently connected to, start scanning again
-  }
-  */
 }
  
 /**
@@ -96,27 +95,23 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
  */
 void connect_callback(uint16_t conn_handle)
 {
-  // Get the reference to current connection
-  BLEConnection* connection = Bluefruit.Connection(conn_handle);
-  char peer_name[4];
-
-  Serial.println("Connected");
- 
-  //Serial.print("Discovering BLE Uart Service ... ");
+  char str[32];
+  if ( clientUart.discover(conn_handle) )
   {
-    //Serial.println("Found it");
-    
-    //Serial.println("Enable TXD's notify");
     clientUart.enableTXD();
+
+    /*
+    adcvalue = analogRead(adcin);
+    sprintf(str, "B %.7s %.2f %.2f %.2f", ID, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
+    Serial.printf(str);
+    */
  
-    //Serial.println("Ready to receive from peripheral");
-  }
+  }else
   {
     
     // disconnect since we couldn't find bleuart service
-    //Bluefruit.disconnect(conn_handle);
+    Bluefruit.disconnect(conn_handle);
   }  
-  connection->getPeerName(last_conn, sizeof(last_conn)); // may need to increase size of last_conn (currently char array length 5)
 }
  
 /**
@@ -139,14 +134,13 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
  */
 void bleuart_rx_callback(BLEClientUart& uart_svc)
 {
-  //Serial.print("[RX]: ");
   
   while ( uart_svc.available() )
   {
     Serial.print( (char) uart_svc.read() );
   }
  
-  //Serial.println();
+  Serial.println();
 }
  
 void loop()
@@ -157,7 +151,6 @@ void loop()
     if ( clientUart.discovered() )
     {
       // Discovered means in working state
-      // Following code is for Serial->BLE forwarding
       // Get Serial input and send to Peripheral
       if ( Serial.available() )
       {

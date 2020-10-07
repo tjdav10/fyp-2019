@@ -47,6 +47,12 @@
  *      This isn't that bad
  *      Possible optimisation is using linked list so that list size is dynamic
  *        Out of scope for FYP probably
+ *    - When the final list is sent, CONVERGENCE_TIME is subtracted from the duration
+ *    
+ *  Kalman Filter:
+ *    meas_uncertainty = 2.2398 which is the the variance of static signal from MATLAB analysis
+ *    set est_uncertainty = meas_uncertainty at start and is updated throughout filter
+ *    process noise (q) = 0.25
  *  
  *  
  *  ARRAY_SIZE
@@ -76,7 +82,7 @@
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (20) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction
+#define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
 #define CONVERGENCE_TIME (5) // kalman filter convergence time
 
 
@@ -291,7 +297,7 @@ void connect_callback(uint16_t conn_handle)
       if(final_list[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
       {
         //This combines all fields from the record into a single string for transmission
-        sprintf(str, "%s %.4s %u %u:%02u", ID, final_list[i].name, final_list[i].duration, final_list[i].hour, final_list[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        sprintf(str, "%s %.4s %u %u:%02u", ID, final_list[i].name, final_list[i].duration - CONVERGENCE_TIME, final_list[i].hour, final_list[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
         wearable.write(str); // write str
       }
     }
@@ -488,7 +494,7 @@ void setUpKalman(kal *k) // parameters are updated pre-meeting with Mehmet on 30
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 1;
+  k->q = 0.25;
 }
 
 void updateRaw(kal *k, uint8_t rssi)

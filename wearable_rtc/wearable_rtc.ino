@@ -69,6 +69,10 @@
  *  RSSI_THRESHOLD
  *  ----------
  *  The RSSI threshold that needs to be crossed for a record to be created.
+ *  
+ *  CONVERGENCE_TIME
+ *  ----------
+ *  Convergence time of Kalman filter.
  */
 
 #include <string.h>
@@ -81,9 +85,9 @@
 
 #define ID ("N001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
-#define TIMEOUT     (20) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
-#define CONVERGENCE_TIME (5) // kalman filter convergence time
+#define TIMEOUT     (40) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
+#define RSSI_THRESHOLD (-70)  // RSSI threshold to log interaction - approx 1.5m
+#define CONVERGENCE_TIME (15) // kalman filter convergence time
 
 
 RTC_PCF8523 rtc;
@@ -517,14 +521,20 @@ void updateDuration(node_record_t *record)
 
 int copyRecords() // need to check for matches in ths fn
 {
+  // SET RTC STUFF HERE
+  // Time
+  DateTime now = rtc.now();
   int match;
   for (uint8_t i=0; i<ARRAY_SIZE; i++)
   {
-    if(memcmp(records[i].addr, final_list[i].addr, 6) == 0) // checking for match
+    if((memcmp(records[i].addr, final_list[i].addr, 6) == 0) && (records[i].last - final_list[i].last <= TIMEOUT)) // checking for match and timeout of record
     {
       if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
       {
-        final_list[i] = records[i];
+        final_list[i].rssi = records[i].rssi;
+        final_list[i].filtered_rssi = records[i].filtered_rssi;
+        final_list[i].last = now.unixtime();
+        updateDuration(&final_list[i]);
       }
     }
     else if(final_list[i].name[0]==0)
@@ -532,6 +542,11 @@ int copyRecords() // need to check for matches in ths fn
       if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
       {
         final_list[i] = records[i];
+        final_list[i].first = now.unixtime();
+        final_list[i].last = now.unixtime();
+        final_list[i].hour = now.hour();
+        final_list[i].minute = now.minute();
+        updateDuration(&final_list[i]);
       }
     }
   }

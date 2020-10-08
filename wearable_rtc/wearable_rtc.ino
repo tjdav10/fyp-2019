@@ -292,9 +292,9 @@ void connect_callback(uint16_t conn_handle)
   char str[32]; // for converting int8_t to char array for sending over BLE
   DateTime now = rtc.now();
   
-  if((((now.unixtime() - last_sent) > 300)) || last_sent==0)
+  if((((now.unixtime() - last_sent) > 3000000)) || last_sent==0)
   {
-    delay(8000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
+    delay(10000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
     // Sending list over BLE (works) (maximum of 20 chars including spaces)
     for (int i=0; i<ARRAY_SIZE; i++)
     {
@@ -527,26 +527,29 @@ int copyRecords() // need to check for matches in ths fn
   int match;
   for (uint8_t i=0; i<ARRAY_SIZE; i++)
   {
-    if((memcmp(records[i].addr, final_list[i].addr, 6) == 0) && (records[i].last - final_list[i].last <= TIMEOUT)) // checking for match and timeout of record
+    for (uint8_t j=0; i<ARRAY_SIZE; j++)
     {
-      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
+      if((memcmp(records[j].addr, final_list[i].addr, 6) == 0) && (records[j].last - final_list[i].last <= TIMEOUT)) // checking for match and timeout of record
       {
-        final_list[i].rssi = records[i].rssi;
-        final_list[i].filtered_rssi = records[i].filtered_rssi;
-        final_list[i].last = now.unixtime();
-        updateDuration(&final_list[i]);
+        if((records[j].duration >= CONVERGENCE_TIME) && (records[j].filtered_rssi >= RSSI_THRESHOLD))
+        {
+          final_list[i].rssi = records[j].rssi;
+          final_list[i].filtered_rssi = records[j].filtered_rssi;
+          final_list[i].last = now.unixtime();
+          updateDuration(&final_list[i]);
+        }
       }
-    }
-    else if(final_list[i].name[0]==0)
-    {
-      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
+      else if(final_list[i].name[0]==0)
       {
-        final_list[i] = records[i];
-        final_list[i].first = now.unixtime();
-        final_list[i].last = now.unixtime();
-        final_list[i].hour = now.hour();
-        final_list[i].minute = now.minute();
-        updateDuration(&final_list[i]);
+        if((records[j].duration >= CONVERGENCE_TIME) && (records[j].filtered_rssi >= RSSI_THRESHOLD))
+        {
+          final_list[i] = records[i];
+          final_list[i].first = now.unixtime();
+          final_list[i].last = now.unixtime();
+          final_list[i].hour = now.hour();
+          final_list[i].minute = now.minute();
+          updateDuration(&final_list[i]);
+        }
       }
     }
   }

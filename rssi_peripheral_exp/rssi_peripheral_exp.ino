@@ -54,7 +54,7 @@ void setup()
     Serial.println("Bluefruit initialized (peripheral mode)");
   }
 
-  Bluefruit.setTxPower(0);    // Check bluefruit.h for supported values
+  Bluefruit.setTxPower(-8);    // Check bluefruit.h for supported values
   Bluefruit.setName("D005");
 
   // Set up and start advertising

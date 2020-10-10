@@ -78,7 +78,7 @@
 #include <stdbool.h>
 #include "RTClib.h"
 
-#define ID ("D003") // ID of this device
+#define ID ("D001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
 #define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
@@ -152,13 +152,13 @@ BLEUart wearable;       // uart over ble, as the peripheral
 
 void setup()
 {
-//  Serial.begin(115200); // remove this for final
+  Serial.begin(115200); // remove this for final
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
     Serial.flush();
     abort();
   }
-//  while ( !Serial ) delay(10);   // for nrf52840 with native usb -  remove for final
+  while ( !Serial ) delay(10);   // for nrf52840 with native usb -  remove for final
 
   Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");

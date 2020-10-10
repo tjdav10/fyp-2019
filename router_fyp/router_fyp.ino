@@ -3,11 +3,16 @@
  * 
  * Connects to wearables to forward relevant data to Gateway
  * 
+ * 
+ * TODO:
+ *    Write some code to prevent connections spamming
+ *    For some reason it stops working after a period of time
+ *    It won't connect to peripheral
  */
 
 #include <bluefruit.h>
 
-char ID[4+1] = "G001";
+char ID[4+1] = "R001";
 
 BLEClientUart clientUart; // bleuart client
 
@@ -31,9 +36,9 @@ float v_min = 3.00; // min battery voltage
  
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
- 
+//  Serial.println("starting...");
   
   // Initialize Bluefruit with maximum connections as Peripheral = 0, Central = 1
   // SRAM usage required by SoftDevice will increase dramatically with number of connections
@@ -75,6 +80,7 @@ void setup()
  */
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {
+//  Serial.println("detected adv packet");
   // Need to have some condition here to see if recently connected to this device (maybe a list of recent names)
   if(1)
   {
@@ -95,6 +101,13 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
  */
 void connect_callback(uint16_t conn_handle)
 {
+  // Get the reference to current connection
+  BLEConnection* connection = Bluefruit.Connection(conn_handle);
+  char peer_name[32] = { 0 };
+  connection->getPeerName(peer_name, sizeof(peer_name));
+//  Serial.print("Connected to ");
+//  Serial.println(peer_name);
+  
   char str[32];
   if ( clientUart.discover(conn_handle) )
   {
@@ -134,10 +147,25 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
  */
 void bleuart_rx_callback(BLEClientUart& uart_svc)
 {
-  
+  char received_string[19+1];
   while ( uart_svc.available() )
   {
-    Serial.print( (char) uart_svc.read() );
+    uart_svc.read(received_string, sizeof(received_string)-1);
+    //Serial.print( (char) uart_svc.read() );
+//    if(received_string[0] == 'B' || received_string[0] == 'N' || received_string[0] == 'D' || received_string[0] == 'V')
+    {
+      Serial.print(received_string);
+      
+//      This would be if I had Lora
+//      Wire.beginTransmission(4); // transmit to device #8           // LoRa send info to gateway
+//      Wire.write(info_from_dispenser);        // sends five bytes
+//      Wire.write(";");              // sends deliminator
+//      Wire.endTransmission();    // stop transmitting
+    }
+//    else
+    {
+      // hand hygiene stuff here
+    }
   }
  
   Serial.println();
@@ -145,22 +173,24 @@ void bleuart_rx_callback(BLEClientUart& uart_svc)
  
 void loop()
 {
-  if ( Bluefruit.Central.connected() )
-  {
-    // Not discovered yet
-    if ( clientUart.discovered() )
-    {
-      // Discovered means in working state
-      // Get Serial input and send to Peripheral
-      if ( Serial.available() )
-      {
-        delay(2); // delay a bit for all characters to arrive
-        
-        char str[20+1] = { 0 };
-        Serial.readBytes(str, 20);
-        
-        clientUart.print( str );
-      }
-    }
-  }
+  delay(2);
+//  Below is not needed - just for debugging
+//  if ( Bluefruit.Central.connected() )
+//  {
+//    // Not discovered yet
+//    if ( clientUart.discovered() )
+//    {
+//      // Discovered means in working state
+//      // Get Serial input and send to Peripheral
+//      if ( Serial.available() )
+//      {
+//        delay(2); // delay a bit for all characters to arrive
+//        
+//        char str[20+1] = { 0 };
+//        Serial.readBytes(str, 20);
+//        
+//        clientUart.print( str );
+//      }
+//    }
+//  }
 }

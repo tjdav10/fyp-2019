@@ -43,6 +43,7 @@ void setup () {
   // When the RTC was stopped and stays connected to the battery, it has
   // to be restarted by clearing the STOP bit. Let's do this to ensure
   // the RTC is running.
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   rtc.start();
 }
 

@@ -145,6 +145,7 @@ void bleuart_rx_callback(BLEClientUart& uart_svc)
  
 void loop()
 {
+  delay(2);
   if ( Bluefruit.Central.connected() )
   {
     // Not discovered yet

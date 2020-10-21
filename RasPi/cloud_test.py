@@ -1,9 +1,9 @@
 import serial
 import pymysql.cursors
 import string
-from datetime import date
+from datetime import date, datetime
 
-ser = serial.Serial('/dev/ttyACM0', 9600) # opening serial port, ACM0 is top left USB port
+ser = serial.Serial('/dev/ttyACM1', 9600) # opening serial port, ACM0 is top left USB port
 conn = pymysql.connect(host='128.199.68.151',
                        user='tim',
                        password='monashtim123',
@@ -13,6 +13,7 @@ conn = pymysql.connect(host='128.199.68.151',
 print("connected to cloud")
 while 1:
     today_date = str(date.today())
+    test=0
 #     print(today_date)
     if(1==1):
         if(ser.in_waiting >0):
@@ -22,7 +23,7 @@ while 1:
             decode = line.decode('unicode_escape') # decoding into string
             with conn.cursor() as cursor:
                 x = decode.split() #splitting using space as delimitor
-                print(x)
+#                 print(x)
                 if x[0]=="B": # battery reading
                     print("battery log")
                     level = int(float(x[2]))
@@ -31,7 +32,7 @@ while 1:
                     y = cursor.fetchall()
                     print(y)
                     y = cursor.rowcount
-                    print(y)
+#                     print(y)
                     if(y!=0):
                         print("updating batt")
                         data = [level, id[0]]
@@ -43,8 +44,8 @@ while 1:
                         cursor.execute('INSERT INTO staff VALUES (%s,%s)',data)
                         conn.commit()
                 else:
-                    print(x)
-                    print(type(x))
+#                     print(x)
+#                     print(type(x))
                     print("interaction")
                     for_upload = [x[0], x[1], x[2], x[3], today_date]
                     print(for_upload)

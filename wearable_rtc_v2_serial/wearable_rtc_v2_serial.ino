@@ -81,7 +81,7 @@
 #define ID ("D001") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
-#define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
+#define RSSI_THRESHOLD (-72)  // RSSI threshold to log interaction - approx 1.5m
 #define CONVERGENCE_TIME (15) // kalman filter convergence time
 
 
@@ -390,7 +390,7 @@ void printRecordList(void)
   {
     Serial.printf("[%i] ", i);
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u) Complete: %i Converged: %i Close: %i %u:%02u\n", records[i].filtered_rssi, records[i].duration, records[i].complete, records[i].converged, records[i].within_threshold, records[i].hour, records[i].minute);
+    Serial.printf("%i (%u) Complete: %i Converged: %i Close: %i %u:%02u %u\n", records[i].filtered_rssi, records[i].duration, records[i].complete, records[i].converged, records[i].within_threshold, records[i].hour, records[i].minute, records[i].duration_close);
   }
 }
 
@@ -520,7 +520,7 @@ void setUpKalman(node_record_t *k) // parameters are updated pre-meeting with Me
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 0.25;
+  k->q = 0.075;
 }
 
 void updateRaw(node_record_t *k, uint8_t rssi)

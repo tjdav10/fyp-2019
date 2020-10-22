@@ -1,16 +1,27 @@
 
 /*  CONTACT TRACING BLE PROGRAM FOR USE IN HAND HYGIENE PROJECT
  *  -----------------------------------------------------------
- *   v1:
+ *   v2:
  *   This program scans for advertising devices (peripherals) in range,
- *  looking for a specific UUID in the advertising packet. When this
+ *  looking for a specific UUID in the advertising packet (and also advertises at the same time). When this
  *  UUID is found, it will add a record to the list. Kalman filtering
  *  is performed on the RSSI to improve the accuracy of the measurement.
  *  A record consists of the name, time of first interaction, duration
  *  of interaction, raw rssi and filtered rssi. Name, duration of
  *  interaction, time of interaction are sent over BLE to a connecting
- *  dispenser. Once the list of records has been sent, it will not send again
- *  until 5 minutes has passed to allow time for interactions to be logged.
+ *  router. Once the list of records has been sent, it will not send again
+ *  until 5 minutes has passed to allow time for meaningful interactions to be logged.
+ *  
+ *  When a detected tag enters the required RSSI proximity, it counts the duration it
+ *  is in that RSSI proximity. If it leaves the proximity but is still within detectable
+ *  range, it is still tracked. If the tag then enters proximity again, it resumes
+ *  increasing that duration.
+ *  E.g. 10 seconds in proximity, leaves proximity but still in room. Enters proximity
+ *  30 seconds later for another 10 seconds, duration of interaction is now 20 seconds.
+ *  
+ *  The record also records the initial time of entering proximity - to maintain accuracy
+ *  with this time, a record will time out if it is not detected for 60 seconds. At this point
+ *  a new tracking record is created, where a timestamp HH:MM is generated again.
  *  
  *  The battery level is also sent when the dispenser connects to the wearable.
  *  
@@ -27,10 +38,6 @@
  *  devices that are also running this program but with different names.
  *  
  *  TODO:
- *  Duration of proximity works
- *    BUGS:
- *      the first duration in each record is a really big number for some reason - but normal after that (2779096485 is the number)
- *      seems to be fixed
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
@@ -39,15 +46,6 @@
  *  
  *  Write better quality code and refine comments
  *  
- *  Add thresholding code for adding records
- *    - Done?
- *    - There are two lists, final_list is the one that should be transmitted.
- *    - Index matches in list named record and list named final_list
- *    - This means there will be some gaps in final_list
- *      This isn't that bad
- *      Possible optimisation is using linked list so that list size is dynamic
- *        Out of scope for FYP probably
- *    - When the final list is sent, CONVERGENCE_TIME is subtracted from the duration
  *    
  *  Kalman Filter:
  *    meas_uncertainty = 2.2398 which is the the variance of static signal from MATLAB analysis
@@ -77,13 +75,15 @@
 #include <SPI.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdbool.h>
 #include "RTClib.h"
 
-#define ID ("N001") // ID of this device
+
+#define ID ("D002") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
-#define TIMEOUT     (20) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
+#define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
 #define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
-#define CONVERGENCE_TIME (5) // kalman filter convergence time
+#define CONVERGENCE_TIME (15) // kalman filter convergence time
 
 
 RTC_PCF8523 rtc;
@@ -104,41 +104,39 @@ BLEUuid uuid = BLEUuid(CUSTOM_UUID);
 /* This struct is used to track detected nodes */
 typedef struct node_record_s
 {
+  // BLE Tag attributes
   uint8_t  addr[6];    // Six byte device address
-  int8_t rssi; // current RSSI
-  int8_t   filtered_rssi;       // min RSSI value
-  uint32_t first; // first timestamp (unix time)
-  uint32_t last; // last timestamp (unix time) - when moved out of proximity
-  uint32_t duration; //duration of contact in seconds
   char name[4];       // Name of detected device
+  // RTC attributes
+  uint32_t first; // first timestamp (unix time)
+  uint32_t last; // last timestamp (unix time)
+  uint32_t first_close;
+  uint32_t last_close;
+  uint32_t duration; //duration of contact in seconds
+  uint32_t duration_close; //duration of within rssi_proximity
+  uint32_t temp_duration;
   uint8_t hour;
   uint8_t minute;
-  char time[5];
-  //int8_t   reserved;   // Padding for word alignment
-} node_record_t;
-
-// Kalman struct for tracking parameters - make an array equal to ARRAY_SIZE and populate it with kalman structs - reset the array when list is reset as well
-typedef struct kalman {
-  // Parameters
+  // Kalman Parameters
   float meas_uncertainty;
   float est_uncertainty;
   float q;
-  // Variables
+  // Kalman Variables
   float prev_est;
   float cur_est;
   float kal_gain;
-  int8_t filtered;
-  int8_t raw;
-} kal;
+  int8_t rssi; // current RSSI
+  int8_t filtered_rssi;       // min RSSI value
+  //int8_t   reserved;   // Padding for word alignment
+  bool complete; // records if this log is complete - if true, do not modify this entry. start a new one
+  bool converged; // enough time has passed for Kalman filter to have converged
+  bool within_threshold; // within proximity
+  bool time_stored;
+} node_record_t;
 
 uint32_t last_sent = 0; // used to store the last unix time the list was sent to dispenser
 
 node_record_t records[ARRAY_SIZE];
-
-node_record_t final_list[ARRAY_SIZE]; // preliminary storage of records to discard first 15s of filtered RSSI
-
-// Creating array of kalman filter objects
-kal kalmans[ARRAY_SIZE];
 
 // Battery level variables
 int adcin    = A6;  // A6 == VDIV is for battery voltage monitoring 
@@ -147,20 +145,24 @@ float mv_per_lsb = 3600.0F/4096.0F; // 12-bit ADC with 3.6V input range
                                     //the default analog reference voltage is 3.6 V
 float v_max = 4.06; // the maximum battery voltage
 float v_min = 3.00; // min battery voltage
+float v_meas;
+float b_level;
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
-//char id[4+1] = "N001";
+
+uint16_t MANU_ID = 65535;
+
 
 void setup()
 {
-  Serial.begin(115200); // remove this for final
+//  Serial.begin(115200); // remove this for final
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
     Serial.flush();
     abort();
   }
-  while ( !Serial ) delay(10);   // for nrf52840 with native usb -  remove for final
+//  while ( !Serial ) delay(10);   // for nrf52840 with native usb -  remove for final
 
   Serial.println("Contact tracing proximity app");
   Serial.println("-------------------------------------\n");
@@ -176,12 +178,10 @@ void setup()
     // Set all RSSI values to lowest value for comparison purposes,
     // since 0 would be higher than any valid RSSI value
     records[i].rssi = -128;
-  }
-
-  // Setting up parameters for kalman filter
-  for(int i=0; i<ARRAY_SIZE; i++)
-  {
-    setUpKalman(&kalmans[i]);
+    setUpKalman(&records[i]);
+    records[i].hour = 0;
+    records[i].minute = 0;
+    records[i].time_stored == false;
   }
   
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
@@ -249,7 +249,8 @@ void startAdv(void)
   // we will look for on the Central side via Bluefruit.Scanner.filterUuid(uuid);
   // A valid 128-bit UUID can be generated online with almost no chance of conflict
   // with another device or etup
-  Bluefruit.Advertising.addUuid(uuid);
+   Bluefruit.Advertising.addUuid(uuid);
+//  Bluefruit.Advertising.addManufacturerData(&MANU_ID, 4);
 
   // if there is not enough room in the advertising packet for name
   // ,store it in the Scan Response instead
@@ -257,6 +258,8 @@ void startAdv(void)
 
   // Can actually have short name in adv packet, 5 characters max
   Bluefruit.Advertising.addName();
+
+  Bluefruit.Advertising.addService(wearable);
 
   /* Start Advertising
    * - Enable auto advertising if disconnected
@@ -276,6 +279,8 @@ void startAdv(void)
 // callback invoked when central connects
 void connect_callback(uint16_t conn_handle)
 {
+  Bluefruit.Advertising.start();
+  Bluefruit.Scanner.start(0);
   // Get the reference to current connection
   BLEConnection* connection = Bluefruit.Connection(conn_handle);
 
@@ -285,54 +290,55 @@ void connect_callback(uint16_t conn_handle)
   Serial.print("Connected to ");
   Serial.println(peer_name);
   
-  char str[32]; // for converting int8_t to char array for sending over BLE
+  char str[32] = {0}; // for converting int8_t to char array for sending over BLE
   DateTime now = rtc.now();
   
   if((((now.unixtime() - last_sent) > 300)) || last_sent==0)
   {
-    delay(8000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
+    delay(3000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
     // Sending list over BLE (works) (maximum of 20 chars including spaces)
     for (int i=0; i<ARRAY_SIZE; i++)
     {
-      if(final_list[i].name[1] != 0) // if name first char is non-zero value, it sends the list so blank entries are not sent (confirmed working)
+      if(records[i].time_stored==true) // if a time has been recorded as stored, this means the entry has gone within proximity
       {
         //This combines all fields from the record into a single string for transmission
-        sprintf(str, "%s %.4s %u %u:%02u", ID, final_list[i].name, final_list[i].duration - CONVERGENCE_TIME, final_list[i].hour, final_list[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
+        sprintf(str, "%s %.4s %u %u:%02u ", ID, records[i].name, records[i].duration_close, records[i].hour, records[i].minute); // maximum of 20 chars (X999 X999 9999 HH:MM)
         wearable.write(str); // write str
       }
     }
     
     memset(str, 0, sizeof(str)); // clear the str buffer
-    
+
+    char str_2[13] = {0};
     // Sending battery information
     adcvalue = analogRead(adcin);
-    sprintf(str, "B %.4s %.2f %.2f %.2f", ID, (adcvalue * mv_per_lsb/1000*2), v_max, v_min); // B at start to indicate battery level, limit id to 4 chars, and voltages to 2 decimal places
-    wearable.write(str);
+    v_meas = (adcvalue * mv_per_lsb/1000*2);
+    b_level = (v_meas-v_min)/(v_max-v_min)*100;
+    sprintf(str_2, "B %.4s %.2f ", ID, b_level);
+    wearable.write(str_2);
   
     DateTime now = rtc.now(); // control to make it so the list isn't sent unless it has been more than 5 minutes
     last_sent = now.unixtime();
   
-    memset(str, 0, sizeof(str)); // clear the str buffer
+    memset(str_2, 0, sizeof(str_2)); // clear the str buffer
   
     // Once the list is sent, clear all lists (records and kalman)
     memset(records, 0, sizeof(records));
-    memset(final_list, 0, sizeof(final_list));
-    memset(kalmans, 0, sizeof(kalmans));
   
     for (int i=0; i<ARRAY_SIZE; i++)
     {
       records[i].rssi = -128;
       records[i].filtered_rssi = -128;
-      final_list[i].rssi = -128;
-      final_list[i].filtered_rssi = -128;
+      records[i].time_stored == false;
+      setUpKalman(&records[i]);
     }
+    delay(1000);
     Bluefruit.disconnect(conn_handle);
   }
   else
   {
 //    char dont_connect[2] = "x"; // sends a don't connect flag
 //    wearable.write(dont_connect);
-    Bluefruit.disconnect(conn_handle);
   }
 
   
@@ -370,16 +376,14 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
   DateTime now = rtc.now();
   record.first = now.unixtime(); // use unix time to calculate duration of contact - this is overwritten in the insertRecord() function if a record already exists
   record.last = now.unixtime(); // this is kept
-  record.hour = now.hour(); // this is overwritten if record already in list
-  record.minute = now.minute(); // this is overwritten if record already in list
+  record.hour = 0;
+  record.minute = 0;
+
   
   /* Attempt to insert the record into the list */
   if (insertRecord(&record) == 1)                 /* Returns 1 if the list was updated */
   {
-    Serial.println("pre");
     printRecordList();                            /* The list was updated, print the new values */
-    Serial.println("final");
-    printFinalList();
   }
 
   // For Softdevice v6: after received a report, scanner will be paused
@@ -394,18 +398,7 @@ void printRecordList(void)
   {
     Serial.printf("[%i] ", i);
     Serial.printf("%.4s ",records[i].name);
-    Serial.printf("%i (%u)\n", records[i].filtered_rssi, records[i].duration);
-  }
-}
-
-/* Prints the current record list to the Serial Monitor */
-void printFinalList(void)
-{
-  for (uint8_t i = 0; i<ARRAY_SIZE; i++)
-  {
-    Serial.printf("[%i] ", i);
-    Serial.printf("%.4s ", final_list[i].name);
-    Serial.printf("%i (%u)\n", final_list[i].filtered_rssi, final_list[i].duration);
+    Serial.printf("%i (%u) Complete: %i Converged: %i Close: %i %u:%02u\n", records[i].filtered_rssi, records[i].duration, records[i].complete, records[i].converged, records[i].within_threshold, records[i].hour, records[i].minute);
   }
 }
 
@@ -418,9 +411,16 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
   uint8_t i;
   
   /*    Check for a match on existing device address */
-  /*    Filter the RSSI */
-  /*    Check if RSSI>Threshold */
-  /*    Replace it if a match is found */
+  /*    Check to see if record has timed out */
+    /*    Timed out: create new record */
+    
+    /*    If not timed out, update record
+    /*    Filter the RSSI */
+    /*    Check if convergence time has elapsed */
+      /*    If it has, check if RSSI is above threshold */
+      /* Update times and durations */
+    
+
   uint8_t match = 0;
   for (i=0; i<ARRAY_SIZE; i++)
   {
@@ -433,22 +433,50 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
       if(((record->last) - (records[i].last)) < (TIMEOUT)) // if the ble device has been detected within the last 60 seconds, keep it in the same record - otherwise start a new interaction
       {
         // Update raw RSSI then filter
-        updateRaw(&kalmans[i], record->rssi);
-        filter(&kalmans[i]);
-        record->filtered_rssi = kalmans[i].filtered;
-  
-        // if there is a previous record for this ID AND the previous record doesn't have data in the 'last' field
-        if ((records[i].first < record->first) && (records[i].first!=0))
+        updateRaw(&records[i], record->rssi);
+        filter(&records[i]);
+        memcpy(&records[i].addr, record->addr,sizeof(record->addr));
+        records[i].last = now.unixtime();
+        updateDuration(&records[i]);
+        records[i].complete = false;
+        if(records[i].filtered_rssi>=RSSI_THRESHOLD && records[i].converged==true) // converged and close enough
         {
-         record->first = records[i].first;
-         record->hour = records[i].hour;
-         record->minute = records[i].minute;
+          records[i].within_threshold = true;
+          if(records[i].first_close == 0 || ((now.unixtime() - records[i].last_close) > 10))
+          {
+            Serial.println("first close timestamp filled");
+            records[i].first_close = now.unixtime();
+            records[i].last_close = now.unixtime();
+            records[i].temp_duration = records[i].duration_close;
+            updateDuration(&records[i]);
+            if(records[i].time_stored ==false)
+            {
+              records[i].hour = now.hour();
+              records[i].minute = now.minute();
+              records[i].time_stored = true;
+            }
+            goto inserted;
+          }
+          records[i].last_close = now.unixtime();
+          updateDuration(&records[i]);
+          goto inserted;
         }
-        record->last = now.unixtime();
-        updateDuration(record);
-
-        memcpy(&records[i], record, sizeof(node_record_t));
+        else if(records[i].converged==true && records[i].filtered_rssi < RSSI_THRESHOLD) // converged but not close enough
+        {
+          Serial.println("not close enough");
+          records[i].within_threshold = false;
+          //records[i].last_close = now.unixtime();
+        }
+        else // not converged
+        {
+          records[i].within_threshold = false;
+        }
+        updateDuration(&records[i]);
         goto inserted;
+      }
+      else
+      {
+        records[i].complete = true;
       }
     }
   }
@@ -460,14 +488,17 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
     if (records[i].name[0] == 0)
     {
       // Update raw RSSI then filter
-      updateRaw(&kalmans[i], record->rssi);
-      filter(&kalmans[i]);
-      record->filtered_rssi = kalmans[i].filtered;
-      if(record->filtered_rssi >= RSSI_THRESHOLD)
-      {
-        memcpy(&records[i], record, sizeof(node_record_t));
-        goto inserted;
-      }
+      updateRaw(&records[i], record->rssi);
+      filter(&records[i]);
+      memcpy(&records[i].addr, record->addr, sizeof(record->addr));
+      memcpy(&records[i].name, record->name, sizeof(record->name));
+      records[i].first = record->first;
+      records[i].last = record->last;
+      updateDuration(&records[i]);
+      records[i].hour = record->hour;
+      records[i].minute = record->minute;
+      records[i].within_threshold = false;
+      goto inserted;
     }
   }
 
@@ -476,30 +507,33 @@ int insertRecord(node_record_t *record) // need to add some code for checking th
   return 0;
 
 inserted:
-  copyRecords();
   return 1; // returning 1 means list has been updated
 }
 
 // Kalman filter function
-void filter(kal *k) // pass by reference to save memory
+void filter(node_record_t *k) // pass by reference to save memory
 {
   k->kal_gain = k->est_uncertainty/(k->est_uncertainty + k->meas_uncertainty); // compute kalman gain
-  k->cur_est = k->prev_est + k->kal_gain*(k->raw - k->prev_est); // compute estimate for current time step
+  k->cur_est = k->prev_est + k->kal_gain*(k->rssi - k->prev_est); // compute estimate for current time step
   k->est_uncertainty = (1 - k->kal_gain)*k->est_uncertainty + abs(k->prev_est - k->cur_est)*k->q; // update estimate uncertainty
   k->prev_est = k->cur_est; // update previous estimate for next loop iteration
-  k->filtered = k->cur_est;
+  k->filtered_rssi = k->cur_est;
+  if(k->filtered_rssi >= RSSI_THRESHOLD)
+  {
+    k->within_threshold = true;
+  }
 }
 
-void setUpKalman(kal *k) // parameters are updated pre-meeting with Mehmet on 30/09/20
+void setUpKalman(node_record_t *k) // parameters are updated pre-meeting with Mehmet on 30/09/20
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 0.25;
+  k->q = 0.075;
 }
 
-void updateRaw(kal *k, uint8_t rssi)
+void updateRaw(node_record_t *k, uint8_t rssi)
 {
-  k->raw = rssi;
+  k->rssi = rssi;
 }
 
 void updateDuration(node_record_t *record)
@@ -507,78 +541,22 @@ void updateDuration(node_record_t *record)
   if(record->last > record->first)
   {
     record->duration = abs((record->last) - (record->first));
-  }
-//  else
-//  {
-//    record->duration = 0;
-//  }
-}
-
-
-int copyRecords() // need to check for matches in ths fn
-{
-  int match;
-  for (uint8_t i=0; i<ARRAY_SIZE; i++)
-  {
-    if(memcmp(records[i].addr, final_list[i].addr, 6) == 0) // checking for match
+    if(record->duration >= CONVERGENCE_TIME)
     {
-      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
-      {
-        final_list[i] = records[i];
-      }
-    }
-    else if(final_list[i].name[0]==0)
-    {
-      if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
-      {
-        final_list[i] = records[i];
-      }
+      record->converged = true;
     }
   }
-
-
-
-
-  /* This block is for optimising the list (where the two lists are different sizes)
-  for (uint8_t i=0; i<ARRAY_SIZE; i++)
+  if(record->last_close > record->first_close)
   {
-    for (uint8_t j=0; j<ARRAY_SIZE; j++)
-      {
-        if(memcmp(records[i].addr, final_list[i].addr, 6) == 0) // checking for match
-        {
-          if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
-          {
-            Serial.println("match id'ed");
-//            Serial.printf("match found");
-            if(final_list[j].first == records[i].first)
-            {
-              Serial.println("firsts equal");
-              Serial.printf("j =  %u, i = %u",j, i);
-              if(final_list[j-1].first==records[i].first)
-              {
-                goto done;
-              }
-              final_list[j] = records[i];
-            }
-          }
-        }
-        
-        else if(final_list[j].name[0]==0)
-        {
-          if((records[i].duration >= CONVERGENCE_TIME) && (records[i].filtered_rssi >= RSSI_THRESHOLD))
-          {
-//            Serial.printf("new record");
-            final_list[j] = records[i];
-            goto done;
-          }
-          //goto done;
-        }
-      }
+    if(record->temp_duration == 0)
+    {
+      record->duration_close = (record->last_close - record->first_close);
+    }
+    else if(record->temp_duration !=0)
+    {
+      record->duration_close = (record->last_close - record->first_close)+ record->temp_duration;
+    }
   }
-
-  */
-  done:
-  return 0;
 }
 
 void loop() 

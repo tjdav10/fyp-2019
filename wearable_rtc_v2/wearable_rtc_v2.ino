@@ -78,7 +78,8 @@
 #include <stdbool.h>
 #include "RTClib.h"
 
-#define ID ("D003") // ID of this device
+
+#define ID ("D002") // ID of this device
 #define ARRAY_SIZE     (8)    // The number of RSSI values to store and compare
 #define TIMEOUT     (60) // Number of seconds before a record is deemed complete, and seperate interaction will be logged
 #define RSSI_THRESHOLD (-75)  // RSSI threshold to log interaction - approx 1.5m
@@ -149,6 +150,9 @@ float b_level;
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
+
+uint16_t MANU_ID = 65535;
+
 
 void setup()
 {
@@ -245,7 +249,8 @@ void startAdv(void)
   // we will look for on the Central side via Bluefruit.Scanner.filterUuid(uuid);
   // A valid 128-bit UUID can be generated online with almost no chance of conflict
   // with another device or etup
-  Bluefruit.Advertising.addUuid(uuid);
+   Bluefruit.Advertising.addUuid(uuid);
+//  Bluefruit.Advertising.addManufacturerData(&MANU_ID, 4);
 
   // if there is not enough room in the advertising packet for name
   // ,store it in the Scan Response instead
@@ -253,6 +258,8 @@ void startAdv(void)
 
   // Can actually have short name in adv packet, 5 characters max
   Bluefruit.Advertising.addName();
+
+  Bluefruit.Advertising.addService(wearable);
 
   /* Start Advertising
    * - Enable auto advertising if disconnected
@@ -272,6 +279,8 @@ void startAdv(void)
 // callback invoked when central connects
 void connect_callback(uint16_t conn_handle)
 {
+  Bluefruit.Advertising.start();
+  Bluefruit.Scanner.start(0);
   // Get the reference to current connection
   BLEConnection* connection = Bluefruit.Connection(conn_handle);
 
@@ -286,7 +295,7 @@ void connect_callback(uint16_t conn_handle)
   
   if((((now.unixtime() - last_sent) > 300)) || last_sent==0)
   {
-    delay(5000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
+    delay(3000); // delay for debugging on phone app - must be present for actual system but doesn't need to be as big
     // Sending list over BLE (works) (maximum of 20 chars including spaces)
     for (int i=0; i<ARRAY_SIZE; i++)
     {
@@ -323,14 +332,13 @@ void connect_callback(uint16_t conn_handle)
       records[i].time_stored == false;
       setUpKalman(&records[i]);
     }
-    
+    delay(1000);
     Bluefruit.disconnect(conn_handle);
   }
   else
   {
 //    char dont_connect[2] = "x"; // sends a don't connect flag
 //    wearable.write(dont_connect);
-    Bluefruit.disconnect(conn_handle);
   }
 
   
@@ -520,7 +528,7 @@ void setUpKalman(node_record_t *k) // parameters are updated pre-meeting with Me
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;
-  k->q = 0.25;
+  k->q = 0.075;
 }
 
 void updateRaw(node_record_t *k, uint8_t rssi)

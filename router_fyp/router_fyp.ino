@@ -11,10 +11,35 @@
  */
 
 #include <bluefruit.h>
+#include "RTClib.h"
+
+#define MAX_CONN (5)
+#define ARRAY_SIZE (10)
 
 char ID[4+1] = "R001";
 
+char last_conn[5];
+
 BLEClientUart clientUart; // bleuart client
+
+RTC_PCF8523 rtc;
+
+// Each peripheral needs its own bleuart client service
+typedef struct
+{
+  char name[16+1];
+
+  uint16_t conn_handle;
+
+  // Each prph need its own bleuart client service
+  BLEClientUart bleuart;
+} prph_info_t;
+
+typedef struct
+{
+  char name[4+1];
+  uint32_t last_time;
+} sent_timer;
 
 const uint8_t CUSTOM_UUID[] =
 {
@@ -23,6 +48,18 @@ const uint8_t CUSTOM_UUID[] =
 };
 
 BLEUuid uuid = BLEUuid(CUSTOM_UUID);
+
+char MANU_ID[4];
+
+uint16_t connection;
+char peer_name[32] = { 0 };
+
+prph_info_t prphs[MAX_CONN];
+sent_timer timer_tracking[ARRAY_SIZE];
+
+// Software Timer for blinking the RED LED
+SoftwareTimer blinkTimer;
+uint8_t connection_num = 0; // for blink pattern
 
 /*
 // Battery level variables
@@ -36,9 +73,16 @@ float v_min = 3.00; // min battery voltage
  
 void setup()
 {
+  if (! rtc.begin()) {
+//  Serial.println("Couldn't find RTC");
+  Serial.flush();
+  abort();
+  }
+  uint16_t MANU_ID = 65535;
   Serial.begin(9600);
   while ( !Serial ) delay(10);   // for nrf52840 with native usb
 //  Serial.println("starting...");
+  rtc.start();
   
   // Initialize Bluefruit with maximum connections as Peripheral = 0, Central = 1
   // SRAM usage required by SoftDevice will increase dramatically with number of connections
@@ -47,11 +91,24 @@ void setup()
   Bluefruit.setName(ID);
 
 //  analogReadResolution(12); // Can be 8, 10, 12 or 14
- 
+
+
+ for (uint8_t m=0; m<ARRAY_SIZE; m++)
+ {
+  timer_tracking[m].last_time = 0;
+  memset(timer_tracking[m].name, 0, sizeof(timer_tracking[m].name));
+ }
+// Serial.printf("done");
  
   // Init BLE Central Uart Serivce
-  clientUart.begin();
-  clientUart.setRxCallback(bleuart_rx_callback);
+  for (uint8_t idx=0; idx<MAX_CONN; idx++)
+  {
+    prphs[idx].conn_handle = BLE_CONN_HANDLE_INVALID;
+
+    // All of BLE Central Uart Serivce
+    prphs[idx].bleuart.begin();
+    prphs[idx].bleuart.setRxCallback(bleuart_rx_callback);
+  }
  
   // Increase Blink rate to different from PrPh advertising mode
   Bluefruit.setConnLedInterval(250);
@@ -69,6 +126,7 @@ void setup()
   Bluefruit.Scanner.setRxCallback(scan_callback);
   Bluefruit.Scanner.restartOnDisconnect(true);
   Bluefruit.Scanner.filterUuid(uuid);
+//  Bluefruit.Scanner.filterMSD(MANU_ID);
   Bluefruit.Scanner.setInterval(160, 80); // in unit of 0.625 ms
   Bluefruit.Scanner.useActiveScan(false);
   Bluefruit.Scanner.start(0);                   // // 0 = Don't stop scanning after n seconds
@@ -81,18 +139,45 @@ void setup()
 void scan_callback(ble_gap_evt_adv_report_t* report)
 {
 //  Serial.println("detected adv packet");
+  DateTime now = rtc.now();
   // Need to have some condition here to see if recently connected to this device (maybe a list of recent names)
-  if(1)
+  uint8_t buffer[4]; // used for names of 4 chars long
+  Bluefruit.Scanner.parseReportByType(report, BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME, buffer, sizeof(buffer)); // puts name of device in buffer
+//  Serial.printf("last_conn = %c\n",last_conn);
+//  Serial.printf("buffer = %c\n",buffer);
+  char strbuff[4+1];
+  memcpy(strbuff, buffer, 4);
+  strbuff[4] = '\0';
+  
+  for (uint8_t j; j<ARRAY_SIZE; j++)
   {
- 
-    // Connect to device with bleuart service in advertising
-    Bluefruit.Central.connect(report);
-  }else
-  {      
-    // For Softdevice v6: after received a report, scanner will be paused
-    // We need to call Scanner resume() to continue scanning
-    Bluefruit.Scanner.resume();
+    if((strcmp(strbuff, timer_tracking[j].name)==0))
+    {
+//      Serial.println(timer_tracking[j].name);
+      if(now.unixtime() - timer_tracking[j].last_time >=300)
+      {
+        timer_tracking[j].last_time = now.unixtime();
+        Bluefruit.Central.connect(report);
+      }
+      else
+      {
+//        Serial.println("recently connected to device");
+        goto done;
+      }
+    }
+    else if(timer_tracking[j].name[0] == 0)
+    {
+      timer_tracking[j].last_time = now.unixtime();
+      strcpy(timer_tracking[j].name, strbuff);
+      goto connect_to_device;
+    }
   }
+  connect_to_device:
+    Bluefruit.Central.connect(report);
+    return;
+  done:
+    Bluefruit.Scanner.resume();
+    return;
 }
  
 /**
@@ -101,17 +186,25 @@ void scan_callback(ble_gap_evt_adv_report_t* report)
  */
 void connect_callback(uint16_t conn_handle)
 {
-  // Get the reference to current connection
-  BLEConnection* connection = Bluefruit.Connection(conn_handle);
-  char peer_name[32] = { 0 };
-  connection->getPeerName(peer_name, sizeof(peer_name));
-//  Serial.print("Connected to ");
-//  Serial.println(peer_name);
+  // Find an available ID to use
+  int id  = findConnHandle(BLE_CONN_HANDLE_INVALID);
+
+  // Eeek: Exceeded the number of connections !!!
+  if ( id < 0 ) return;
   
-  char str[32];
-  if ( clientUart.discover(conn_handle) )
+  prph_info_t* peer = &prphs[id];
+  peer->conn_handle = conn_handle;
+
+  Bluefruit.Connection(conn_handle)->getPeerName(peer->name, sizeof(peer->name)-1);
+
+//  Serial.print("Connected to ");
+//  Serial.println(peer->name);
+  
+  if ( peer->bleuart.discover(conn_handle) )
   {
-    clientUart.enableTXD();
+//    Serial.println("uart discovered");
+    peer->bleuart.enableTXD();
+    Bluefruit.Scanner.start(0);
 
     /*
     adcvalue = analogRead(adcin);
@@ -125,6 +218,7 @@ void connect_callback(uint16_t conn_handle)
     // disconnect since we couldn't find bleuart service
     Bluefruit.disconnect(conn_handle);
   }  
+  connection_num++;
 }
  
 /**
@@ -136,8 +230,21 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
 {
   (void) conn_handle;
   (void) reason;
-  
-  //Serial.print("Disconnected, reason = 0x"); Serial.println(reason, HEX);
+
+  connection_num--;
+
+  // Mark the ID as invalid
+  int id  = findConnHandle(conn_handle);
+
+  // Non-existant connection, something went wrong, DBG !!!
+  if ( id < 0 ) return;
+
+  // Mark conn handle as invalid
+  prphs[id].conn_handle = BLE_CONN_HANDLE_INVALID;
+
+//  Serial.print(prphs[id].name);
+//  Serial.println(" disconnected!");
+  Bluefruit.Scanner.start(0);
 }
  
 /**
@@ -147,7 +254,15 @@ void disconnect_callback(uint16_t conn_handle, uint8_t reason)
  */
 void bleuart_rx_callback(BLEClientUart& uart_svc)
 {
-  char received_string[19+1];
+  // uart_svc is prphs[conn_handle].bleuart
+  uint16_t conn_handle = uart_svc.connHandle();
+
+  int id = findConnHandle(conn_handle);
+  prph_info_t* peer = &prphs[id];
+
+
+  
+  char received_string[20+1] = {0};
   while ( uart_svc.available() )
   {
     uart_svc.read(received_string, sizeof(received_string)-1);
@@ -155,6 +270,12 @@ void bleuart_rx_callback(BLEClientUart& uart_svc)
 //    if(received_string[0] == 'B' || received_string[0] == 'N' || received_string[0] == 'D' || received_string[0] == 'V')
     {
       Serial.print(received_string);
+      if(received_string[0] =='B')
+      {
+//        Serial.println("\nbattery received");
+        
+//        Bluefruit.disconnect(connection);
+      }
       
 //      This would be if I had Lora
 //      Wire.beginTransmission(4); // transmit to device #8           // LoRa send info to gateway
@@ -193,4 +314,33 @@ void loop()
 //      }
 //    }
 //  }
+}
+
+int findConnHandle(uint16_t conn_handle)
+{
+  for(int id=0; id<BLE_MAX_CONNECTION; id++)
+  {
+    if (conn_handle == prphs[id].conn_handle)
+    {
+      return id;
+    }
+  }
+
+  return -1;  
+}
+
+void blink_timer_callback(TimerHandle_t xTimerID)
+{
+  (void) xTimerID;
+
+  // Period of sequence is 10 times (1 second). 
+  // RED LED will toggle first 2*n times (on/off) and remain off for the rest of period
+  // Where n = number of connection
+  static uint8_t count = 0;
+
+  if ( count < 2*connection_num ) digitalToggle(LED_RED);
+  if ( count % 2 && digitalRead(LED_RED)) digitalWrite(LED_RED, LOW); // issue #98
+
+  count++;
+  if (count >= 10) count = 0;
 }

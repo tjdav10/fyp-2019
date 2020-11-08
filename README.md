@@ -14,8 +14,20 @@ The file `router_ble.ino` will run on the same type of BLE board. It can also ru
 The file `gateway_cloud.py` runs using Python 3.7. I recommend running it on a Raspberry Pi.
 
 ## Wearable ID Card
-Follow [this guide](https://learn.adafruit.com/introducing-the-adafruit-nrf52840-feather/overview) to set up the BLE boards and the Arduino environment (for wearable ID card and router)/
+Follow [this guide](https://learn.adafruit.com/introducing-the-adafruit-nrf52840-feather/overview) to set up the BLE boards and the Arduino environment (for wearable ID card and router).
+
+### Contact Tracing Flowchart
+![Wearable Contact Tracing Flowchart](/wearable_contact_tracing.png)
+
+### Wearable to Router Flowchart
+![Wearable to Router Connection Flowchart](/wearable_connection.png)
 ## BLE Router
 `todo`
+
+### Router Flowchart
+![BLE Router Flowchart](/router.png)
 ## Gateway
 `todo`
+
+### Gateway Flowchart
+![Gateway Flowchart](/gateway.png)

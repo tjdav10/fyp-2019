@@ -99,3 +99,28 @@ for j=1:length(R)
     x4.LabelOrientation = 'horizontal';
 end
 
+figure('Name', 'Process Noise Chosen');
+plot(data(:,1),data(:,2));
+hold on;
+plot(time, kalman_out(:,5));
+moving_avg_5 = movmean(data(:,2),5);
+moving_avg_5 = round(moving_avg_5);
+plot(time, moving_avg_5);
+x1=xline(0,'-',{'0.5m'});
+x2=xline(61,'-',{'1.0m'});
+x3=xline(124,'-',{'1.5m'});
+x4=xline(184,'-',{'2.0m'});
+xlim([0 243]);
+x1.LabelVerticalAlignment = 'bottom';
+x2.LabelVerticalAlignment = 'bottom';
+x3.LabelVerticalAlignment = 'bottom';
+x4.LabelVerticalAlignment = 'bottom';
+
+x1.LabelOrientation = 'horizontal';
+x2.LabelOrientation = 'horizontal';
+x3.LabelOrientation = 'horizontal';
+x4.LabelOrientation = 'horizontal';
+legend('Raw', 'Kalman', 'Moving average (window of 5)');
+title('Kalman vs Moving Average Filter');
+xlabel('Time (s)');
+ylabel('RSSI (dBm)');

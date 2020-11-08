@@ -41,16 +41,12 @@
  *  
  *  Increase number of available spots on list and compare memory size needed
  *  
- *  Implement final Kalman filter
- *    Done just need to adjust process noise
- *  
- *  Write better quality code and refine comments
  *  
  *    
  *  Kalman Filter:
  *    meas_uncertainty = 2.2398 which is the the variance of static signal from MATLAB analysis
  *    set est_uncertainty = meas_uncertainty at start and is updated throughout filter
- *    process noise (q) = 0.25
+ *    process noise (q) = 0.075 - chosen from analysis in MATLAB
  *  
  *  
  *  ARRAY_SIZE
@@ -67,6 +63,8 @@
  *  RSSI_THRESHOLD
  *  ----------
  *  The RSSI threshold that needs to be crossed for a record to be created.
+ *  
+ *  CONVERGENCE_TIME
  */
 
 #include <string.h>
@@ -271,7 +269,7 @@ void startAdv(void)
    * https://developer.apple.com/library/content/qa/qa1931/_index.html
    */
   Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(800, 800);    // in units of 0.625 ms (152.5ms = 244*0.625) (probably a bit too fast)
+  Bluefruit.Advertising.setInterval(800, 800);    // in units of 0.625 ms (800*0.625ms = 500ms)
   Bluefruit.Advertising.setFastTimeout(0);      // number of seconds in fast mode
   Bluefruit.Advertising.start();
 }

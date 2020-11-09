@@ -1,4 +1,4 @@
-# Activity Tracking for Hand Hygiene IoT Project
+# Activity Tracking/Contact Tracing for Hand Hygiene IoT Project
 This repo has the source code for a system that tracks and records the names of wearable BLE devices that have been within 1.5m. There are three main components:
 - `wearable_ble.ino` (for wearable BLE ID card)
 - `router_ble.ino` (for the BLE router)

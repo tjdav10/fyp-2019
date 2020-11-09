@@ -105,11 +105,11 @@ typedef struct node_record_s
   // BLE Tag attributes
   uint8_t  addr[6];    // Six byte device address
   char name[4];       // Name of detected device
-  // RTC attributes
-  uint32_t first; // first timestamp (unix time)
-  uint32_t last; // last timestamp (unix time)
-  uint32_t first_close;
-  uint32_t last_close;
+  // RTC attributes (timestamps all unixtime)
+  uint32_t first; // first timestamp
+  uint32_t last; // last seen timestamp
+  uint32_t first_close; // timestamp they entered 1.5m proximity
+  uint32_t last_close; // timestamp they were last seen in 1.5m proximity
   uint32_t duration; //duration of contact in seconds
   uint32_t duration_close; //duration of within rssi_proximity
   uint32_t temp_duration;
@@ -148,9 +148,6 @@ float b_level;
 
 // Add BLE services
 BLEUart wearable;       // uart over ble, as the peripheral
-
-uint16_t MANU_ID = 65535;
-
 
 void setup()
 {
@@ -248,7 +245,6 @@ void startAdv(void)
   // A valid 128-bit UUID can be generated online with almost no chance of conflict
   // with another device or etup
    Bluefruit.Advertising.addUuid(uuid);
-//  Bluefruit.Advertising.addManufacturerData(&MANU_ID, 4);
 
   // if there is not enough room in the advertising packet for name
   // ,store it in the Scan Response instead
@@ -333,14 +329,6 @@ void connect_callback(uint16_t conn_handle)
     delay(1000);
     Bluefruit.disconnect(conn_handle);
   }
-  else
-  {
-//    char dont_connect[2] = "x"; // sends a don't connect flag
-//    wearable.write(dont_connect);
-  }
-
-  
-  //Bluefruit.disconnect(conn_handle); // disconnects once list is sent
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason)
@@ -522,7 +510,7 @@ void filter(node_record_t *k) // pass by reference to save memory
   }
 }
 
-void setUpKalman(node_record_t *k) // parameters are updated pre-meeting with Mehmet on 30/09/20
+void setUpKalman(node_record_t *k)
 {
   k->meas_uncertainty = 2.2398; // the variance of static signal
   k->est_uncertainty = k->meas_uncertainty;

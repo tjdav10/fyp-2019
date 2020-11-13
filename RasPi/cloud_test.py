@@ -5,8 +5,8 @@ from datetime import date, datetime
 
 ser = serial.Serial('/dev/ttyACM0', 9600) # opening serial port, ACM0 is top left USB port
 conn = pymysql.connect(host='128.199.68.151',
-                       user='tim',
-                       password='monashtim123',
+                       user='xxx',
+                       password='xxx',
                        db='hand_hygiene',
                        port=3306,
                        cursorclass=pymysql.cursors.DictCursor)
